@@ -446,7 +446,7 @@ if __name__ == '__main__':
             IS_OLD = l_p == MOVE_MAIN_OLD
             # print("#" * 50)
             print(fullpath.as_posix())
-            # recursive_dir(l_p)
+            recursive_dir(l_p)
         else:
             write_log(f"{fullpath.as_posix()!r} заданная папка не найдена")
             print(f"{fullpath.as_posix()!r} not exists")
