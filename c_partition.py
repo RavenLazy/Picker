@@ -11,6 +11,7 @@ class Counter:
     totals = 0
     moves = 0
     delete = 0
+    folder = 0
     __flag = True
 
     def __new__(cls, *args, **kwargs):
@@ -28,7 +29,9 @@ NAME_MOVE_DIR = "Old"
 NAME_RULE = ".rule"
 NAME_PATH = ".path"
 START_FOLDER_NAME = pathlib.Path.cwd()
-CURRENT_DATE = datetime.datetime.now().timestamp()
+a = datetime.datetime.now().strftime("%d-%m-%Y %H")
+CURRENT_DATE = datetime.datetime.strptime(a, "%d-%m-%Y %H").timestamp()
+del a
 
 MAIN_EXCLUDE = [NAME_RULE, NAME_PATH]
 DELETE_ALL_OLD = False
@@ -45,9 +48,14 @@ LOG_TEXT = []
 
 
 def write_log(text):
-    if NAME_LOG:
-        lines = type(text) == list
+    lines = type(text) == list
+    if console_out:
+        if lines:
+            print(*text, sep="\n")
+        else:
+            print(text)
 
+    if NAME_LOG:
         with open(NAME_LOG, "a") as file:
             if lines:
                 file.writelines([f"{line}\n" for line in text])
@@ -132,13 +140,14 @@ def decompress(el: list, folders: pathlib.Path):
         pat = compile_rule1.split(item, maxsplit=2)
         pat += [''] * (3 - len(pat))
         name, dates, lock = pat
+        dates = dates or '0N'
         try:
             dates = int(normal_date(dates)) or (0 if name[0] in list_includes_znak else int(CURRENT_DATE))
         except IndexError:
             print(f"{item!r} ошибка разметки в списке правил {NAME_RULE!r}."
                   f"\nПапка: {folders.as_posix()!r}.\nСтрока: {count}")
             sys.exit(1)
-        lock = False if lock == "U" else True   # True - папка не будет удалена
+        lock = False if lock == "U" else True  # True - папка не будет удалена
         yield name, dates, lock
 
 
@@ -185,13 +194,14 @@ class Job:
         return True
 
     def fast_del(self):
-        # if self.filename.is_file():
-        #     return False
         if IS_OLD:
+            self.log.append(f"{self.filename.as_posix()!r} Время хранения истекло - удаляем!")
             if self.filename.is_file():
                 self.filename.unlink(missing_ok=True)
+                self.counter.delete += 1
             else:
                 self.filename.rmdir()
+                self.counter.folder += 1
         else:
             self.move_to_old()
         return True
@@ -199,14 +209,16 @@ class Job:
     def is_fast(self):
         if self.is_dir():
             fast = self._delta("@")
-            print(f"Удалить эту директорию: {self.filename} -> {fast}")
             return fast
         return False
 
     def move_to_old(self):
         move_files = self.move_dir.joinpath(self.filename.name)
+        write_log(f"Время {self.filename.as_posix()!r} вышло за заданный диапазон. "
+                  f"Переносим в {move_files.as_posix()!r}")
         if not self.move_dir.exists():
             self.move_dir.mkdir(parents=True)
+        self.counter.moves += 1
         self.filename.replace(move_files)
 
     def iterdir(self):
@@ -218,15 +230,14 @@ class Job:
             _, values = self.equals.get('+') or self.equals.get("!", (0, "U"))
             closed = {"L": True, "U": False}[values]
             if is_contains is False and closed is False:
+                write_log(["Папка пуста. Есть разрешение на удаление.", "Удалено!"])
+                self.counter.folder += 1
                 self.filename.rmdir()
+                return 1
+            return 0
 
-    def is_old_delete(self):
-        if IS_OLD and DELETE_ALL_OLD:
-            r = re.search(old_date_pattern, self.filename.as_posix())
-            if r and self.include():
-                shutil.rmtree(self.filename, ignore_errors=True)
-            return True
-        return False
+    def as_posix(self):
+        return self.filename.as_posix()
 
 
 class FStat:
@@ -246,9 +257,18 @@ class FStat:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         #  Проверка на пустоту каталога и возможность его удаления
+        global NAME_LOG
         if exc_val:
-            print(exc_type, exc_tb, exc_val)
+            NAME_LOG = NAME_LOG or "error.log"
+            write_log([exc_type, exc_tb, exc_val])
             return False
+        txt = ' Ищу в: ' + f"{self.directory.as_posix()!r} "
+        write_log(f"{'':->20}{txt:-<100}")
+        if self._lot.log:
+            write_log(self._lot.log)
+        write_log(f"Всего файлов: {self._lot.counter.totals}")
+        write_log(f"Удалено: {self._lot.counter.delete}")
+        write_log(f"Перемещено файлов: {self._lot.counter.moves}")
 
     @staticmethod
     def _return_list(text, folders):
@@ -294,33 +314,34 @@ class FStat:
             self._lot.max_time = max([return_time_file(x, self._lot.type_time)
                                       for x in self.directory.iterdir() if x.is_file()] or [CURRENT_DATE])
 
-            # print(datetime.datetime.fromtimestamp(self._lot.max_time))
         for self._lot.filename in sorted(self.directory.iterdir(), key=lambda x: x.is_dir()):
             mm = self._match_return(self._lot.filename.name)
             self._lot.equals = dict(mm)
             yield self._lot
 
 
-def recursive_dir(rr: pathlib.Path):
-    txt = ' Ищу в ' + f"{rr.as_posix()!r} "
-    LOG_TEXT.append(f"{txt:-^100}")
-    print(f"{txt:-^}")
+def recursive_dir(rr):
     #  Todo: Добавить еще один аргумент в файл с правилами для вложенных папок. Если включено elem.is_max,
     #   то вложенные папки обрабатываются по времени самой папки, а не файлов!
+
+    del_folder = 0
     with FStat(rr, type_time=MODIFICATION_TIME) as rules:
+        elem: Job
         for elem in rules.iterdir():
             if elem.exclude():
                 continue
             if elem.is_dir():
                 if elem.is_fast():
-                    print(f"Delete {elem.filename}")
                     elem.fast_del()
                 else:
                     recursive_dir(elem)
-                elem.del_dir()
+                del_folder += elem.del_dir()
                 continue
+            elem.counter.totals += 1
             if elem.include():
                 elem.fast_del()
+
+    write_log(f"Удалено папок: {del_folder}")
 
 
 def return_list_main(elem: argparse.Namespace):
@@ -344,8 +365,7 @@ def for_size(item):
     coeff = 1000
     size, ident = re.findall(r"([\d]+)([MmKkBb]?)", item)[0]
     size = int(size)
-    ret = {"m": size * (coeff ** 2), "k": size * coeff, "b": size * 1}.get(ident.lower(), size)
-    return ret
+    return {"m": size * (coeff ** 2), "k": size * coeff, "b": size * 1}.get(ident.lower(), size)
 
 
 def parse_arg():
@@ -367,7 +387,7 @@ def parse_arg():
                      help=f"Удаляем все старые файлы из папки переноса. Анализируется только основная папка. "
                           f"По умолчанию, анализируется каждый файл.")
 
-    arg.add_argument("--old", "-o", nargs=1, type=str, default=NAME_MOVE_DIR, metavar=f"{'Folder/Old'!r}",
+    arg.add_argument("--name_old", "-n_o", nargs=1, type=str, default=NAME_MOVE_DIR, metavar=f"{'Folder/Old'!r}",
                      help=f"Имя папки в которую будут переносится старые файлы. По умолчанию: {NAME_MOVE_DIR}")
 
     group1.add_argument("-s", "--search", type=str, nargs="+", action="append",
@@ -386,10 +406,15 @@ def parse_arg():
     arg.add_argument("-sl", "--size_log", type=for_size, default=1000,
                      help="Размер лог файла в байтах. По умолчанию 1000 байт. "
                           "При превышении файл будет переименован и создан новый")
+
+    arg.add_argument("-o", "--out", action="store_false",
+                     help="Выводить информацию в консоль? По умолчанию: Да")
+
     arg_s = arg.parse_args()
     sfname: pathlib.Path
 
-    sfname, npath, nrule, dallold, nmovedir, maindir, log_write, name_log, app_log, s_log = return_list_main(arg_s)
+    sfname, npath, nrule, dallold, nmovedir, maindir, log_write, \
+        name_log, app_log, s_log, c_out = return_list_main(arg_s)
 
     if sfname.exists() is False:
         raise OSError(f"{START_FOLDER_NAME.as_posix()!r} not exists")
@@ -409,7 +434,7 @@ def parse_arg():
     ss = [re.sub(r"(%start%)", sfname.as_posix(), elem) for elem in ss]
     ss = map(pathlib.Path, ss)
 
-    return sfname, ss, nrule, dallold, nmovedir, name_log, app_log, s_log
+    return sfname, ss, nrule, dallold, nmovedir, name_log, app_log, s_log, c_out
 
 
 def log():
@@ -428,7 +453,8 @@ def log():
 
 
 if __name__ == '__main__':
-    START_FOLDER_NAME, folder, NAME_RULE, DELETE_ALL_OLD, NAME_MOVE_DIR, NAME_LOG, append_log, size_log = parse_arg()
+    START_FOLDER_NAME, folder, NAME_RULE, DELETE_ALL_OLD, NAME_MOVE_DIR, \
+        NAME_LOG, append_log, size_log, console_out = parse_arg()
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
     try:
         if NAME_LOG.exists():
@@ -439,14 +465,10 @@ if __name__ == '__main__':
     write_log(f"Current platform: {sys.platform}")
     MOVE_MAIN_OLD = START_FOLDER_NAME.joinpath(NAME_MOVE_DIR)
     MOVE_OLD = MOVE_MAIN_OLD.joinpath(STR_NOW_DATE)
-    print(MOVE_OLD)
     for l_p in folder:
         fullpath = START_FOLDER_NAME.joinpath(l_p)
         if l_p.exists():
             IS_OLD = l_p == MOVE_MAIN_OLD
-            # print("#" * 50)
-            print(fullpath.as_posix())
             recursive_dir(l_p)
         else:
             write_log(f"{fullpath.as_posix()!r} заданная папка не найдена")
-            print(f"{fullpath.as_posix()!r} not exists")
