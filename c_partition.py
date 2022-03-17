@@ -1,5 +1,4 @@
 #  coding: utf-8
-import shutil
 import sys
 import re
 import datetime
@@ -8,17 +7,18 @@ import argparse
 
 
 class Counter:
-    totals = 0
-    moves = 0
-    delete = 0
-    folder = 0
-    __flag = True
+    all = 0
 
-    def __new__(cls, *args, **kwargs):
-        if cls.__flag:
-            cls.__flag = False
-            return super().__new__(Counter)
-        return cls
+    def __new__(cls):
+        cls.all += 1
+        self = super().__new__(cls)
+        return self
+
+    def __init__(self):
+        self.folder = 0
+        self.totals = 0
+        self.moves = 0
+        self.delete = 0
 
 
 CREATION_TIME = 0
