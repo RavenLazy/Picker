@@ -4,6 +4,7 @@ import re
 import datetime
 import pathlib
 import argparse
+import shutil
 
 CREATION_TIME = 0
 MODIFICATION_TIME = 1
@@ -24,12 +25,26 @@ DEFAULT_LOG = "log.log"
 
 list_includes_znak = ("@", "!", "+")
 
-compile_rule = re.compile(rf"([-\\{''.join(list_includes_znak)}.*\w\s]+)+[:]*([-\d]+[\w]*)*[:]*([\w])*")
-compile_rule1 = re.compile(r"[:]")
+compile_rule = re.compile(r"[:]")
 old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 
+counter_text = ("Объектов: ", "Количество папок: ", "Учтенных файлов: ", "Пропущено: ",
+                "Перемещено: ", "Удалено файлов: ", "Удалено папок: ")
 
-# LOG_TEXT = []
+
+def app_list(array: list, text: str):
+    if text not in array:
+        return array + [text]
+    return array
+
+
+def return_list(text, folders):
+    tmp = []
+    for name, times, lock in decompress(text, folders):
+        if name in tmp:
+            continue
+        tmp.append(name)
+        yield name, (times, lock)
 
 
 def return_list_main(elem: argparse.Namespace):
@@ -79,7 +94,7 @@ def parse_arg():
                      help=f"Имя папки в которую будут переносится старые файлы. По умолчанию: {NAME_MOVE_DIR}")
 
     group1.add_argument("-s", "--search", type=str, nargs="+", action="append",
-                        metavar=f"{'Folder/1'!r} {'Folder/2'!r} ...", help="Папки поиска")
+                        metavar=f"{'Folder/1'!r} {'Folder/2'!r} ...", default=[], help="Папки поиска")
 
     group2.add_argument("-l", "--log", action="store_true",
                         help="Разрешить запись лога. Задается без дополнительного аргумента. По умолчанию лог не пишем")
@@ -103,6 +118,8 @@ def parse_arg():
 
     sfname, npath, nrule, dallold, nmovedir, maindir, log_write, \
     name_log, app_log, s_log, c_out = return_list_main(arg_s)
+
+    maindir = app_list(maindir, nmovedir)
 
     if sfname.exists() is False:
         raise OSError(f"{START_FOLDER_NAME.as_posix()!r} not exists")
@@ -232,7 +249,7 @@ def decompress(el: list, folders: pathlib.Path):
     count = 0
     for item in el:
         count += 1
-        pat = compile_rule1.split(item, maxsplit=2)
+        pat = compile_rule.split(item, maxsplit=2)
         pat += [''] * (3 - len(pat))
         name, dates, lock = pat
         dates = dates or '0N'
@@ -247,10 +264,19 @@ def decompress(el: list, folders: pathlib.Path):
 
 
 class Counter:
-    __slots__ = ("total", "folder", "files", "exclude", "move_object", "delete_files", "delete_folders")
+    """
+    Счетчик\n
+    ----\n
+    - total: Всего объектов в папке\n
+    - folder: Количество папок\n
+    - files: Файлы дошедшие до проверки include\n
+    - exclude: Пропущено файлов\n
+    - move_object: Перемещенных объектов\n
+    - delete_files: Удалено файлов\n
+    - delete_folders: Удалено папок\n
+    """
 
-    text = ("Объектов: ", "Количество папок: ", "Учтенных файлов: ", "Пропущенных файлов: ",
-            "Перемещено: ", "Удалено файлов: ", "Удалено папок: ")
+    __slots__ = ("total", "folder", "files", "exclude", "move_object", "delete_files", "delete_folders")
 
     def __init__(self):
         self.total = 0  # Всего объектов в папке
@@ -272,7 +298,7 @@ class Counter:
 
     def __str__(self):
         return '\n'.join(
-            [f"{key}{value}" for key, value in zip(self.text, [self.__getattribute__(x) for x in self.__slots__])])
+            [f"{key}{value}" for key, value in zip(counter_text, [self.__getattribute__(x) for x in self.__slots__])])
 
 
 class Job:
@@ -318,49 +344,59 @@ class Job:
         return ret
 
     def include(self):
+        self.counter.files += 1
         return self._delta("+") or self._delta("!")
 
     def is_dir(self):
         if self.filename.is_file():
-            self.counter.files += 1
             return False
+        self.counter.folder += 1
         return True
 
-    def fast_del(self):
-        # if IS_OLD:
-        #     self.log.append(f"{self.filename.as_posix()!r} Время хранения истекло - удаляем!")
-        #     if self.filename.is_file():
-        #         self.counter.delete_files += self.del_or_move(self.filename.unlink, missing_ok=True)
-        #     else:
-        #         self.counter.delete_folders += self.del_or_move(self.filename.rmdir)
-        # else:
-        self._move_to_old()
-        return True
-
-    def is_fast(self):
-        if self.is_dir():
-            self.counter.folder += 1
-            fast = self._delta("@")
-            return fast
-        return False
-
-    def _move_to_old(self):
+    def work_file(self):
+        """
+        Переносим файл в папку Old
+        :return:
+        """
         move_files = self.move_dir.joinpath(self.filename.name)
         self.log.append(f"Время {fullpath.joinpath(self.filename.name).as_posix()!r} вышло за заданный диапазон. "
                         f"Переносим в {move_files.as_posix()!r}")
         if not self.move_dir.exists():
             self.move_dir.mkdir(parents=True)
         self.counter.move_object += self.del_or_move(self.filename.replace, move_files)
+        return True
+
+    def del_dir(self):
+        """
+        Удаляем папку без проверки
+        """
+        self.log.append(f'Удаляем папку {self.filename}')
+        self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
+
+    def is_fast(self):
+        if self.filename.is_dir():
+            fast = self._delta("@")
+            return fast
+        return False
+
+    def is_empty(self):
+        return not any((x for x in self.filename.iterdir()))
 
 
 class JobOld(Job):
 
-    def fast_del(self):
+    def work_file(self):
+        """
+        Удаляем файл или папку
+        :return:
+        """
+        fast = self.is_fast()
         self.log.append(f"{self.filename.as_posix()!r} Время хранения истекло - удаляем!")
         if self.filename.is_file():
             self.counter.delete_files += self.del_or_move(self.filename.unlink, missing_ok=True)
         else:
             self.counter.delete_folders += self.del_or_move(self.filename.rmdir)
+        return True
 
 
 class FStat:
@@ -393,20 +429,11 @@ class FStat:
         write_log(f"{txt:-^100}")
         if self._lot.log:
             write_log(self._lot.log)
-            write_log('='*100)
-        write_log(self.get_counter())
+            write_log('=' * 100)
+        write_log(self._lot.counter)
 
     def get_counter(self):
         return self._lot.counter
-
-    @staticmethod
-    def _return_list(text, folders):
-        tmp = []
-        for name, times, lock in decompress(text, folders):
-            if name in tmp:
-                continue
-            tmp.append(name)
-            yield name, (times, lock)
 
     @staticmethod
     def _add_znak(item, znak):
@@ -419,7 +446,7 @@ class FStat:
         rules = self.directory.joinpath(NAME_RULE)
         rule_text = (rules.read_text(encoding="utf-8").splitlines() if rules.exists() else [])
         rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-") + self._add_znak(self._parent, "+")
-        self._lst_key, self._lst_value = zip(*self._return_list(rule_text, START_FOLDER_NAME.joinpath(self.directory)))
+        self._lst_key, self._lst_value = zip(*return_list(rule_text, START_FOLDER_NAME.joinpath(self.directory)))
         self._rules_compile_new = re.compile("(" + "$)|(".join(
             replace_template({"+": "[+]", "*": r".+", "!": "[+]", "@": "[@]"}, self._lst_key)) + "$)")
         return self
@@ -463,12 +490,15 @@ def recursive_dir(rr):
                 continue
             if elem.is_dir():
                 if elem.is_fast():
-                    elem.fast_del()
+                    elem.del_dir()
                 else:
                     count += recursive_dir(elem)
+                print(elem.equals)
+                if elem.filename.exists() and elem.is_empty():
+                    print('Пустая папка')
                 continue
             if elem.include():
-                elem.fast_del()
+                elem.work_file()
         count += rules.get_counter()
 
     return count
@@ -483,7 +513,8 @@ if __name__ == '__main__':
             log()
     except AttributeError:
         pass
-    write_log(f"{' '.join([' Start write at:', datetime.datetime.now().strftime('%d-%m-%Y %H:%M'), ' ']):-^100}")
+    tm = datetime.datetime.now()
+    write_log(f"{' '.join([' Start scan at:', tm.strftime('%d-%m-%Y %H:%M'), ' ']):-^100}")
     write_log(f"Current platform: {sys.platform}")
     MOVE_MAIN_OLD = START_FOLDER_NAME.joinpath(NAME_MOVE_DIR)
     MOVE_OLD = MOVE_MAIN_OLD.joinpath(STR_NOW_DATE)
@@ -493,7 +524,7 @@ if __name__ == '__main__':
     for l_p in folder:
         fullpath = START_FOLDER_NAME.joinpath(l_p)
         if l_p.exists():
-            IS_OLD = l_p == MOVE_MAIN_OLD
+            IS_OLD = l_p.name == MOVE_MAIN_OLD.name
             total_parts = recursive_dir(l_p)
             s = ' '.join(['*', '[\'' + fullpath.as_posix() + '\']', '*'])
             write_log(f"{s:*^100}\n{total_parts}")
@@ -501,4 +532,9 @@ if __name__ == '__main__':
         else:
             write_log(f"{fullpath.as_posix()!r} заданная папка не найдена")
 
-    write_log(f"{'#' * 100}\nВсего:\n{'_' * 100}\n{total_count}")
+    write_log(f"{'#' * 100}\n{' Всего: ':-^100}\n{total_count}")
+    tm_stop = datetime.datetime.now()
+    tz = datetime.timezone(datetime.timedelta(hours=0))
+    write_log(f"{' '.join([' Stop scan at:', tm_stop.strftime('%d-%m-%Y %H:%M'), ' ']):-^100}")
+    write_log(datetime.datetime.fromtimestamp((tm_stop - tm).total_seconds(),
+                                              tz=tz).strftime("Часов: %H Минут: %M Секунд: %S Микросекунд: %f"))
