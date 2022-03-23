@@ -14,9 +14,7 @@ NAME_MOVE_DIR = "Old"
 NAME_RULE = ".rule"
 NAME_PATH = ".path"
 START_FOLDER_NAME = pathlib.Path.cwd()
-a = datetime.datetime.now().strftime("%d-%m-%Y %H")
-CURRENT_DATE = datetime.datetime.strptime(a, "%d-%m-%Y %H").timestamp()
-del a
+CURRENT_DATE = datetime.datetime.now().replace(second=0, microsecond=0).timestamp()
 
 MAIN_EXCLUDE = [NAME_RULE, NAME_PATH]
 DELETE_ALL_OLD = False
@@ -117,9 +115,11 @@ def parse_arg():
     sfname: pathlib.Path
 
     sfname, npath, nrule, dallold, nmovedir, maindir, log_write, \
-    name_log, app_log, s_log, c_out = return_list_main(arg_s)
+        name_log, app_log, s_log, c_out = return_list_main(arg_s)
 
     maindir = app_list(maindir, nmovedir)
+    if any([x.count(':') or x.count('/') for x in maindir]):
+        raise ValueError('Путь должен быть относительным. Без слэш и двоеточий')
 
     if sfname.exists() is False:
         raise OSError(f"{START_FOLDER_NAME.as_posix()!r} not exists")
@@ -136,8 +136,7 @@ def parse_arg():
         if _start.exists():
             ss = _start.read_text().splitlines()
 
-    ss = [re.sub(r"(%start%)", sfname.as_posix(), elem) for elem in ss]
-    ss = map(pathlib.Path, ss)
+    ss = map(sfname.joinpath, ss)
 
     return sfname, ss, nrule, dallold, nmovedir, name_log, app_log, s_log, c_out
 
@@ -157,7 +156,9 @@ def log():
         NAME_LOG.unlink(missing_ok=True)
 
 
-def write_log(text):
+def write_log(text, n_log=None):
+    if n_log is None:
+        n_log = NAME_LOG
     lines = type(text) == list
     #  Выводим текст в консоль
     if console_out:
@@ -167,8 +168,8 @@ def write_log(text):
             print(text)
 
     #  Выводим текст в файл
-    if NAME_LOG:
-        with open(NAME_LOG, "a") as file:
+    if n_log:
+        with open(n_log, "a") as file:
             if lines:
                 file.writelines([f"{line}\n" for line in text])
             else:
@@ -190,26 +191,20 @@ def return_time_file(name: pathlib.Path, type_time):
 
 
 def revert_rules(elem: dict):
+    def _mn(x):
+        for d, c in zip(x, ["Y:U", "M:U", "D:U", "H:U"]):
+            if d == 0:
+                continue
+            yield d, c
     # Переводим секунды в корректное время
-    if elem:
-        znak, rt = zip(*[(x, y) for x, y in elem.items() if x in list_includes_znak])
-    else:
-        rt = None
-        znak = "+"
-
-    if rt is None:
+    if len(elem) == 0:
         return []
-    count = -1
-    for seconds, lock in rt:
-        count += 1
-        if seconds == 0:
-            num = 0
-            dates = "D:U"
-        else:
-            num, dates = min(
-                [(n, d) for n, d in zip([seconds / 31536000, seconds / 2592000, seconds / 86400, seconds / 3600],
-                                        ["Y:U", "M:U", "D:U", "H:U"]) if n - int(n) == 0])
-        yield f"{znak[count]}*:{int(num)}{dates}"
+
+    for znak, (seconds, lock) in elem.items():
+        _n, _d = min(_mn([seconds // 31536000, seconds // 2592000, seconds // 86400, seconds // 3600]),
+                     default=(0, "H:U"))
+        _ret = f"{znak}*:{_n}{_d}"
+        yield _ret
 
 
 def difference_date(date):
@@ -229,19 +224,17 @@ def replace_template(pat, item):
 def normal_date(item: str):
     # Заданное время в секунды
     codes: str
-    times: str | int
+    times: str | float
 
     times, codes = re.findall(r"([-\d]+)+(\w)", item)[0]
 
-    times = int(times)
+    if codes.lower() == "n":
+        return CURRENT_DATE
 
-    ret = {"d": datetime.timedelta(days=1 * times).total_seconds(),
-           "m": datetime.timedelta(days=30 * times).total_seconds(),
-           "y": datetime.timedelta(days=365 * times).total_seconds(),
-           "h": datetime.timedelta(hours=1 * times).total_seconds(),
-           "n": CURRENT_DATE,
-           "e": 0}
-    return ret[codes.lower()]
+    return float(times) * {"h": 3600,
+                           "d": 86400,
+                           "m": 2592000,
+                           "y": 31557600}.get(codes.lower(), 0)
 
 
 def decompress(el: list, folders: pathlib.Path):
@@ -255,9 +248,9 @@ def decompress(el: list, folders: pathlib.Path):
         dates = dates or '0N'
         try:
             dates = int(normal_date(dates)) or (0 if name[0] in list_includes_znak else int(CURRENT_DATE))
-        except IndexError:
-            print(f"{item!r} ошибка разметки в списке правил {NAME_RULE!r}."
-                  f"\nПапка: {folders.as_posix()!r}.\nСтрока: {count}")
+        except ValueError:
+            write_log(f"{item!r} ошибка разметки в списке правил {NAME_RULE!r}."
+                      f"\nПапка: {folders.as_posix()!r}.\nСтрока: {count}")
             sys.exit(1)
         lock = False if lock == "U" else True  # True - папка не будет удалена
         yield name, dates, lock
@@ -331,11 +324,15 @@ class Job:
     def _delta(self, znak):
         fl = self.equals.get(znak, False)
         if fl is False:
-            return {"-": True, "+": False, "!": False, "@": False}[znak]
+            return {znak in list_includes_znak: False, znak == "-": True}[True]
         date, _ = fl
-        if self.is_max and znak != "@":
-            return CURRENT_DATE - self.max_time > date
-        return CURRENT_DATE - return_time_file(self.filename, self.type_time) > date
+        if znak == "!":
+            # self.max_time = max([return_time_file(x, self.type_time)
+            #                      for x in self.filename.parent.iterdir() if x.is_file()] or [CURRENT_DATE])
+            # if self.is_max and znak != "@":
+            return int(CURRENT_DATE - self.max_time) > date
+
+        return int(CURRENT_DATE - return_time_file(self.filename, self.type_time)) > date
 
     def exclude(self):
         ret = not self._delta("-")
@@ -348,10 +345,10 @@ class Job:
         return self._delta("+") or self._delta("!")
 
     def is_dir(self):
-        if self.filename.is_file():
-            return False
-        self.counter.folder += 1
-        return True
+        if self.filename.is_dir():
+            self.counter.folder += 1
+            return True
+        return False
 
     def work_file(self):
         """
@@ -368,19 +365,23 @@ class Job:
 
     def del_dir(self):
         """
-        Удаляем папку без проверки
+        Удаляем папку
         """
         self.log.append(f'Удаляем папку {self.filename}')
+        print(self.equals)
         self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
 
     def is_fast(self):
-        if self.filename.is_dir():
-            fast = self._delta("@")
-            return fast
-        return False
+        fast = self._delta("@")
+        return fast
 
-    def is_empty(self):
-        return not any((x for x in self.filename.iterdir()))
+    def empty(self):
+        if self.filename.is_dir():
+            empty = any((x for x in self.filename.iterdir()))
+            if empty:
+                return False
+            self.del_dir()
+            return True
 
 
 class JobOld(Job):
@@ -390,7 +391,6 @@ class JobOld(Job):
         Удаляем файл или папку
         :return:
         """
-        fast = self.is_fast()
         self.log.append(f"{self.filename.as_posix()!r} Время хранения истекло - удаляем!")
         if self.filename.is_file():
             self.counter.delete_files += self.del_or_move(self.filename.unlink, missing_ok=True)
@@ -409,21 +409,19 @@ class FStat:
             self._lot = Job(rule)
 
         self._lot.type_time = type_time
+        self.is_max = False
         if isinstance(rule, Job):
             self.directory = pathlib.Path(rule.filename)
             self._parent = revert_rules(rule.equals)
-            self._lot.is_max = rule.equals.get("!") is not None
+            self.is_max = rule.equals.get("!") is not None
         else:
             self.directory = pathlib.Path(rule)
             self._parent = []
         self._lot.move_dir = MOVE_OLD / self.directory.as_posix().replace(f"{START_FOLDER_NAME.as_posix()}/", "")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        #  Проверка на пустоту каталога и возможность его удаления
-        global NAME_LOG
         if exc_val:
-            NAME_LOG = NAME_LOG or "error.log"
-            write_log([exc_type, exc_tb, exc_val])
+            write_log([exc_type, exc_tb, exc_val], NAME_LOG or "error.log")
             return False
         txt = ' Ищу в: ' + f"{self.directory.as_posix()!r} "
         write_log(f"{txt:-^100}")
@@ -448,7 +446,7 @@ class FStat:
         rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-") + self._add_znak(self._parent, "+")
         self._lst_key, self._lst_value = zip(*return_list(rule_text, START_FOLDER_NAME.joinpath(self.directory)))
         self._rules_compile_new = re.compile("(" + "$)|(".join(
-            replace_template({"+": "[+]", "*": r".+", "!": "[+]", "@": "[@]"}, self._lst_key)) + "$)")
+            replace_template({"+": "[+]", "*": r".+", "!": "[!]", "@": "[@]"}, self._lst_key)) + "$)")
         return self
 
     @staticmethod
@@ -456,7 +454,7 @@ class FStat:
         return elem[last.lastindex - 1][index]
 
     def _match_return(self, elem):
-        znak = ["-", "@", "+"]
+        znak = ["-", "@", "+", "!"]
         for z in znak:
             ret = self._rules_compile_new.match(z + elem)
             if ret is None:
@@ -466,7 +464,7 @@ class FStat:
                 {True: "L", False: "U"}.get(self._get_item(self._lst_value, ret, 1), True))
 
     def iterdir(self):
-        if self._lot.is_max:
+        if self.is_max:
             self._lot.max_time = max([return_time_file(x, self._lot.type_time)
                                       for x in self.directory.iterdir() if x.is_file()] or [CURRENT_DATE])
 
@@ -478,10 +476,6 @@ class FStat:
 
 
 def recursive_dir(rr):
-    global total_count
-    #  Todo: Добавить еще один аргумент в файл с правилами для вложенных папок. Если включено elem.is_max,
-    #   то вложенные папки обрабатываются по времени самой папки, а не файлов!
-
     count = Counter()
     with FStat(rr) as rules:
         elem: Job
@@ -493,12 +487,12 @@ def recursive_dir(rr):
                     elem.del_dir()
                 else:
                     count += recursive_dir(elem)
-                print(elem.equals)
-                if elem.filename.exists() and elem.is_empty():
-                    print('Пустая папка')
+                    print(elem.equals)
+                elem.empty()
                 continue
             if elem.include():
                 elem.work_file()
+
         count += rules.get_counter()
 
     return count
@@ -506,14 +500,14 @@ def recursive_dir(rr):
 
 if __name__ == '__main__':
     START_FOLDER_NAME, folder, NAME_RULE, DELETE_ALL_OLD, NAME_MOVE_DIR, \
-    NAME_LOG, append_log, size_log, console_out = parse_arg()
+        NAME_LOG, append_log, size_log, console_out = parse_arg()
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
     try:
         if NAME_LOG.exists():
             log()
     except AttributeError:
         pass
-    tm = datetime.datetime.now()
+    tm = datetime.datetime.fromtimestamp(CURRENT_DATE)
     write_log(f"{' '.join([' Start scan at:', tm.strftime('%d-%m-%Y %H:%M'), ' ']):-^100}")
     write_log(f"Current platform: {sys.platform}")
     MOVE_MAIN_OLD = START_FOLDER_NAME.joinpath(NAME_MOVE_DIR)
