@@ -30,7 +30,7 @@ counter_text = ("Объектов: ", "Количество папок: ", "Уч
                 "Перемещено: ", "Удалено файлов: ", "Удалено папок: ")
 
 
-def app_list(array: list, text: str):
+def add_in_list_set(array: list, text: str):
     if text not in array:
         return array + [text]
     return array
@@ -63,10 +63,10 @@ def return_list_main(elem: argparse.Namespace):
 def for_size(item):
     ident: str
     size: int
-    coeff = 1000
+    coefficient = 1000
     size, ident = re.findall(r"([\d]+)([MmKkBb]?)", item)[0]
     size = int(size)
-    return {"m": size * (coeff ** 2), "k": size * coeff, "b": size * 1}.get(ident.lower(), size)
+    return {"m": size * (coefficient ** 2), "k": size * coefficient, "b": size * 1}.get(ident.lower(), size)
 
 
 def parse_arg():
@@ -117,7 +117,7 @@ def parse_arg():
     sfname, npath, nrule, dallold, nmovedir, maindir, log_write, \
         name_log, app_log, s_log, c_out = return_list_main(arg_s)
 
-    maindir = app_list(maindir, nmovedir)
+    maindir = add_in_list_set(maindir, nmovedir)
     if any([x.count(':') or x.count('/') for x in maindir]):
         raise ValueError('Путь должен быть относительным. Без слэш и двоеточий')
 
@@ -327,9 +327,6 @@ class Job:
             return {znak in list_includes_znak: False, znak == "-": True}[True]
         date, _ = fl
         if znak == "!":
-            # self.max_time = max([return_time_file(x, self.type_time)
-            #                      for x in self.filename.parent.iterdir() if x.is_file()] or [CURRENT_DATE])
-            # if self.is_max and znak != "@":
             return int(CURRENT_DATE - self.max_time) > date
 
         return int(CURRENT_DATE - return_time_file(self.filename, self.type_time)) > date
@@ -342,7 +339,7 @@ class Job:
 
     def include(self):
         self.counter.files += 1
-        return self._delta("+") or self._delta("!")
+        return self._delta("!") or self._delta("+")
 
     def is_dir(self):
         if self.filename.is_dir():
@@ -351,9 +348,9 @@ class Job:
         return False
 
     def work_file(self):
-        """
-        Переносим файл в папку Old
-        :return:
+        f"""
+        Переносим файл в папку Old {NAME_MOVE_DIR}
+        :return: bool
         """
         move_files = self.move_dir.joinpath(self.filename.name)
         self.log.append(f"Время {fullpath.joinpath(self.filename.name).as_posix()!r} вышло за заданный диапазон. "
@@ -368,7 +365,6 @@ class Job:
         Удаляем папку
         """
         self.log.append(f'Удаляем папку {self.filename}')
-        print(self.equals)
         self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
 
     def is_fast(self):
@@ -413,7 +409,7 @@ class FStat:
         if isinstance(rule, Job):
             self.directory = pathlib.Path(rule.filename)
             self._parent = revert_rules(rule.equals)
-            self.is_max = rule.equals.get("!") is not None
+            self.is_max = len(rule.equals.get("!", [])) > 0
         else:
             self.directory = pathlib.Path(rule)
             self._parent = []
@@ -499,6 +495,8 @@ def recursive_dir(rr):
 
 
 if __name__ == '__main__':
+    # Todo: Требуется окончательная проверка
+
     START_FOLDER_NAME, folder, NAME_RULE, DELETE_ALL_OLD, NAME_MOVE_DIR, \
         NAME_LOG, append_log, size_log, console_out = parse_arg()
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
