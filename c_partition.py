@@ -50,6 +50,7 @@ MODIFICATION_TIME = 1
 ACCESS_TIME = 2
 
 NAME_MOVE_DIR = "Old"
+Default_rule_old_days = "@*:7D:L"
 NAME_RULE = ".rule"
 NAME_PATH = ".path"
 START_FOLDER_NAME = pathlib.Path.cwd()
@@ -67,6 +68,17 @@ old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 
 counter_text = ("Объектов: ", "Количество папок: ", "Учтенных файлов: ", "Пропущено: ",
                 "Перемещено: ", "Удалено файлов: ", "Удалено папок: ")
+
+
+def old_default_rule(path: pathlib.Path):
+    rule = path.joinpath(NAME_RULE)
+    if path.exists() is False:
+        path.mkdir(parents=True)
+    if rule.exists():
+        return None
+    with rule.open("w") as file:
+        file.write(Default_rule_old_days)
+    return None
 
 
 def add_in_list_set(array: list, text: str):
@@ -548,6 +560,7 @@ if __name__ == '__main__':
     write_log(f"{' '.join([' Start scan at:', tm.strftime('%d-%m-%Y %H:%M'), ' ']):-^100}")
     write_log(f"Current platform: {sys.platform}")
     MOVE_MAIN_OLD = START_FOLDER_NAME.joinpath(NAME_MOVE_DIR)
+    old_default_rule(MOVE_MAIN_OLD)
     MOVE_OLD = MOVE_MAIN_OLD.joinpath(STR_NOW_DATE)
     total_count = Counter()
     total_parts = Counter()
