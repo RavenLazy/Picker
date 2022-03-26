@@ -51,7 +51,7 @@ ACCESS_TIME = 2
 
 NAME_MOVE_DIR = "Trash"
 DAY_TO_PURGE = 14
-Default_rule_old_days = ["@*:1D:L"]
+Default_rule_old_days = ["@*:1D:L\n"]
 
 NAME_RULE = ".rule"
 NAME_PATH = ".path"
@@ -420,12 +420,22 @@ class Job:
         self.counter.move_object += self.del_or_move(self.filename.replace, move_files)
         return True
 
+    def _is_lock(self):
+        lock: str
+        _, lock = zip(*self.equals.values())
+        if lock[0].lower() == 'l':
+            return True
+        return False
+
     def del_dir(self):
         """
         Удаляем папку
         """
-        self.log.append(f'Удаляем папку {self.filename}')
-        self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
+        if self._is_lock() is False:
+            self.log.append(f'Удаляем папку {self.filename}')
+            self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
+            return True
+        return False
 
     def is_fast(self):
         fast = self._delta("@")
@@ -433,8 +443,8 @@ class Job:
 
     def empty(self):
         if self.filename.is_dir():
-            empty = any((x for x in self.filename.iterdir()))
-            if empty:
+            full = any((x for x in self.filename.iterdir())) or self._is_lock()
+            if full:
                 return False
             self.del_dir()
             return True
@@ -525,14 +535,13 @@ class FStat:
 
         for self._lot.filename in sorted(self.directory.iterdir(), key=lambda x: x.is_file()):
             self._lot.counter.total += 1
-            mm = self._match_return(self._lot.filename.name)
-            self._lot.equals = dict(mm)
+            self._lot.equals = dict(self._match_return(self._lot.filename.name))
             yield self._lot
 
 
-def recursive_dir(rr):
+def recursive_dir(dir_name):
     count = Counter()
-    with FStat(rr) as rules:
+    with FStat(dir_name) as rules:
         elem: Job
         for elem in rules.iterdir():
             if elem.exclude():
@@ -542,7 +551,7 @@ def recursive_dir(rr):
                     elem.del_dir()
                 else:
                     count += recursive_dir(elem)
-                elem.empty()
+                    elem.empty()
                 continue
             if elem.include():
                 elem.work_file()
