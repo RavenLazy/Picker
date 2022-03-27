@@ -51,7 +51,7 @@ ACCESS_TIME = 2
 
 NAME_MOVE_DIR = "Trash"
 DAY_TO_PURGE = 14
-Default_rule_old_days = ["@*:1D:L\n"]
+Default_rule_old_days = f"@*:1D:U\n-*:{DAY_TO_PURGE}D:U"
 
 NAME_RULE = ".rule"
 NAME_PATH = ".path"
@@ -80,9 +80,8 @@ def old_default_rule(path: pathlib.Path):
         path.mkdir(parents=True)
     if rule.exists():
         return None
-    default = Default_rule_old_days + [f"-{NAME_MOVE_DIR}:{DAY_TO_PURGE}D:L"]
     with rule.open("w") as file:
-        file.writelines(default)
+        file.writelines(Default_rule_old_days)
     return None
 
 
@@ -303,8 +302,7 @@ def decompress(el: list, folders: pathlib.Path):
     for item in el:
         count += 1
         pat = compile_rule.split(item, maxsplit=2)
-        pat += [''] * (3 - len(pat))
-        name, dates, lock = pat
+        pat += [''] * (3 - len(pat))        name, dates, lock = pat
         dates = dates or '0N'
         try:
             dates = int(normal_date(dates)) or (0 if name[0] in list_includes_znak else int(CURRENT_DATE))
@@ -431,14 +429,15 @@ class Job:
         """
         Удаляем папку
         """
-        if self._is_lock() is False:
-            self.log.append(f'Удаляем папку {self.filename}')
-            self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
-            return True
-        return False
+        self.log.append(f'Удаляем папку {self.filename}')
+        self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
+
+    def is_fast_date(self):
+        fast = self._delta("@")
+        return fast
 
     def is_fast(self):
-        fast = self._delta("@")
+        fast = self.equals.get("@") is not None and self._is_lock() is False
         return fast
 
     def empty(self):
@@ -536,7 +535,8 @@ class FStat:
         for self._lot.filename in sorted(self.directory.iterdir(), key=lambda x: x.is_file()):
             self._lot.counter.total += 1
             self._lot.equals = dict(self._match_return(self._lot.filename.name))
-            yield self._lot
+            if self._lot.equals:
+                yield self._lot
 
 
 def recursive_dir(dir_name):
@@ -548,10 +548,11 @@ def recursive_dir(dir_name):
                 continue
             if elem.is_dir():
                 if elem.is_fast():
-                    elem.del_dir()
-                else:
-                    count += recursive_dir(elem)
-                    elem.empty()
+                    if elem.is_fast_date():
+                        elem.del_dir()
+                    continue
+                count += recursive_dir(elem)
+                elem.empty()
                 continue
             if elem.include():
                 elem.work_file()
