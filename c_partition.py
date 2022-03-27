@@ -302,7 +302,8 @@ def decompress(el: list, folders: pathlib.Path):
     for item in el:
         count += 1
         pat = compile_rule.split(item, maxsplit=2)
-        pat += [''] * (3 - len(pat))        name, dates, lock = pat
+        pat += [''] * (3 - len(pat))
+        name, dates, lock = pat
         dates = dates or '0N'
         try:
             dates = int(normal_date(dates)) or (0 if name[0] in list_includes_znak else int(CURRENT_DATE))
