@@ -44,6 +44,7 @@ import datetime
 import pathlib
 import argparse
 import shutil
+from itertools import tee
 
 CREATION_TIME = 0
 MODIFICATION_TIME = 1
@@ -91,13 +92,36 @@ def add_in_list_set(array: list, text: str):
     return array
 
 
-def return_list(text, folders):
+def decompress(el: list, folders: pathlib.Path, dp: bool):
+    # Раскладываем время из файла правил
+    name: str
+    count = 0
+    for item in el:
+        count += 1
+        pat = compile_rule.split(item, maxsplit=3)
+        pat += [''] * (4 - len(pat))
+        name, dates, lock, deep = pat
+        deep = int(deep or '0')
+        dates = dates or '0N'
+        if dp is False:
+            try:
+                dates = int(normal_date(dates)) or (0 if name[0] in list_includes_znak else int(CURRENT_DATE))
+            except ValueError:
+                write_log(f"{item!r} ошибка разметки в списке правил {NAME_RULE!r}."
+                          f"\nПапка: {folders.as_posix()!r}.\nСтрока: {count}")
+                sys.exit(1)
+            lock = False if lock == "U" else True  # True - папка не будет удалена
+
+        yield name, (dates, lock, deep)
+
+
+def return_list(text, folders, deep=False):
     tmp = []
-    for name, times, lock in decompress(text, folders):
+    for name, args in decompress(text, folders, deep):
         if name in tmp:
             continue
         tmp.append(name)
-        yield name, (times, lock)
+        yield name, args
 
 
 def return_list_main(elem: argparse.Namespace):
@@ -255,11 +279,12 @@ def revert_rules(elem: dict):
             if d == 0:
                 continue
             yield d, c
+
     # Переводим секунды в корректное время
     if len(elem) == 0:
         return []
 
-    for znak, (seconds, lock) in elem.items():
+    for znak, (seconds, lock, deep) in elem.items():
         _n, _d = min(_mn([seconds // 31536000, seconds // 2592000, seconds // 86400, seconds // 3600]),
                      default=(0, "H:U"))
         _ret = f"{znak}*:{_n}{_d}"
@@ -296,23 +321,15 @@ def normal_date(item: str):
                            "y": 31557600}.get(codes.lower(), 0)
 
 
-def decompress(el: list, folders: pathlib.Path):
-    # Раскладываем время из файла правил
-    count = 0
-    for item in el:
-        count += 1
-        pat = compile_rule.split(item, maxsplit=2)
-        pat += [''] * (3 - len(pat))
-        name, dates, lock = pat
-        dates = dates or '0N'
-        try:
-            dates = int(normal_date(dates)) or (0 if name[0] in list_includes_znak else int(CURRENT_DATE))
-        except ValueError:
-            write_log(f"{item!r} ошибка разметки в списке правил {NAME_RULE!r}."
-                      f"\nПапка: {folders.as_posix()!r}.\nСтрока: {count}")
-            sys.exit(1)
-        lock = False if lock == "U" else True  # True - папка не будет удалена
-        yield name, dates, lock
+def delta(znak, equals, filename, max_time=CURRENT_DATE):
+    fl = equals.get(znak, False)
+    if fl is False:
+        return {znak in list_includes_znak: False, znak == "-": True}[True]
+    date, *_ = fl
+    if znak == "!":
+        return int(CURRENT_DATE - max_time) > date
+
+    return int(CURRENT_DATE - return_time_file(filename, MODIFICATION_TIME)) > date
 
 
 class Counter:
@@ -354,13 +371,15 @@ class Counter:
 
 
 class Job:
-    __slots__ = ("filename", "equals", "move_dir", "is_max", "type_time", "max_time", "counter", "log")
+    __slots__ = ("filename", "equals", "move_dir", "is_max", "type_time", "max_time", "counter", "log", "deep")
 
     def __init__(self, lots):
         if isinstance(lots, Job):
             self.filename = lots.filename
+            self.deep = lots.deep
         else:
             self.filename = pathlib.Path(lots)
+            self.deep = []
         self.equals = {}
         self.move_dir: str | pathlib.Path = ''
         self.is_max = False
@@ -380,25 +399,15 @@ class Job:
         foo(*args, **kwargs)
         return 1
 
-    def _delta(self, znak):
-        fl = self.equals.get(znak, False)
-        if fl is False:
-            return {znak in list_includes_znak: False, znak == "-": True}[True]
-        date, _ = fl
-        if znak == "!":
-            return int(CURRENT_DATE - self.max_time) > date
-
-        return int(CURRENT_DATE - return_time_file(self.filename, self.type_time)) > date
-
     def exclude(self):
-        ret = not self._delta("-")
+        ret = not delta("-", self.equals, self.filename)
         if ret:
             self.counter.exclude += 1
         return ret
 
     def include(self):
         self.counter.files += 1
-        return self._delta("!") or self._delta("+")
+        return delta("!", self.equals, self.filename, self.max_time) or delta("+", self.equals, self.filename)
 
     def is_dir(self):
         if self.filename.is_dir():
@@ -421,8 +430,8 @@ class Job:
 
     def _is_lock(self):
         lock: str
-        _, lock = zip(*self.equals.values())
-        if lock[0].lower() == 'l':
+        _, lock, _ = zip(*self.equals.values())
+        if any(lock):
             return True
         return False
 
@@ -434,7 +443,7 @@ class Job:
         self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
 
     def is_fast_date(self):
-        fast = self._delta("@")
+        fast = delta("@", self.equals, self.filename)
         return fast
 
     def is_fast(self):
@@ -479,9 +488,11 @@ class FStat:
             self.directory = pathlib.Path(rule.filename)
             self._parent = revert_rules(rule.equals)
             self.is_max = len(rule.equals.get("!", [])) > 0
+            self.deep = rule.deep
         else:
             self.directory = pathlib.Path(rule)
             self._parent = []
+            self.deep = []
         self._lot.move_dir = MOVE_OLD / self.directory.as_posix().replace(f"{START_FOLDER_NAME.as_posix()}/", "")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -502,16 +513,40 @@ class FStat:
     def _add_znak(item, znak):
         return list(map(lambda x: znak + x if x[0] not in list_includes_znak else x, item))
 
+    @staticmethod
+    def get_deep(dp, rule_text):
+        tmp = []
+        rule_text += [elem for elem in dp]
+        if len(rule_text) == 0:
+            yield '', ''
+        for name, args in decompress(rule_text, START_FOLDER_NAME, True):
+            date, lock, deep = args
+
+            if name in tmp:
+                continue
+            tmp.append(name)
+            lock = 'L' if len(lock) == 0 else lock
+            if deep - 1 != -1:
+                if deep > 0:
+                    deep -= 1
+                rl = ":".join([name, date, lock, str(deep)])
+                yield rl, rl
+            else:
+                yield ":".join([name, date, lock, '0']), ''
+
     def __enter__(self):
         # Читаем файл с правилами, если найден, добавляем правила по умолчанию.
         # На выходе получаем список кортежей с дельта-временем, определением можно ли удалить папку и именем этой папки
 
         rules = self.directory.joinpath(NAME_RULE)
         rule_text = (rules.read_text(encoding="utf-8").splitlines() if rules.exists() else [])
+        rule_text, deep = zip(*self.get_deep(self.deep, rule_text))
+        self.deep = list(filter(len, deep))
+        rule_text = list(filter(len, rule_text))
         rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-") + self._add_znak(self._parent, "+")
         self._lst_key, self._lst_value = zip(*return_list(rule_text, START_FOLDER_NAME.joinpath(self.directory)))
         self._rules_compile_new = re.compile("(" + "$)|(".join(
-            replace_template({"+": "[+]", "*": r".+", "!": "[!]", "@": "[@]"}, self._lst_key)) + "$)")
+            replace_template({"+": "[+]", "*": r".*", "!": "[!]", "@": "[@]", "?": "."}, self._lst_key)) + "$)")
         return self
 
     @staticmethod
@@ -522,20 +557,40 @@ class FStat:
         znak = ["-", "@", "+", "!"]
         for z in znak:
             ret = self._rules_compile_new.match(z + elem)
-            if ret is None:
+            if ret is None or len(ret.string) == 0:
                 continue
-            yield self._get_item(self._lst_key, ret), (
-                self._get_item(self._lst_value, ret),
-                {True: "L", False: "U"}.get(self._get_item(self._lst_value, ret, 1), True))
+            keys = self._lst_key[ret.lastindex - 1]
+            values = self._lst_value[ret.lastindex - 1]
+            yield keys[0], values
+            # yield self._get_item(self._lst_key, ret), (
+            #     self._get_item(self._lst_value, ret),
+            #     {True: "L", False: "U"}.get(self._get_item(self._lst_value, ret, 1), True))
 
     def iterdir(self):
+        # Если is_range_max равно False, то все файлы в этой папке можно пропустить! Оставить только
+        # проход по вложенным папкам!
+        is_range_max = True
+        # Todo: Добавить функцию, чтобы возвращала общий подсчет папок и файлов при итерации
+        srt = ((elem, return_time_file(elem, MODIFICATION_TIME), num) for num, elem in
+               enumerate(sorted(self.directory.iterdir(), key=lambda x: x.is_file()), start=1))
         if self.is_max:
             self._lot.max_time = max([return_time_file(x, self._lot.type_time)
                                       for x in self.directory.iterdir() if x.is_file()] or [CURRENT_DATE])
+            srt, srt_copy, for_count = tee(srt, 3)
+            pth, max_time = max(srt, key=lambda x: x[1] if x[0].is_file() else 0, default=(None, CURRENT_DATE))
+            if pth:
+                match = dict(self._match_return(pth.name))
+                is_range_max = delta("!", match, pth, max_time)
+                if is_range_max:
+                    srt = srt_copy
+                else:
+                    srt = ((elem, times, num) for elem, times, num in srt_copy if elem.is_dir())
 
-        for self._lot.filename in sorted(self.directory.iterdir(), key=lambda x: x.is_file()):
-            self._lot.counter.total += 1
-            self._lot.equals = dict(self._match_return(self._lot.filename.name))
+        self._lot.deep = self.deep
+        for self._lot.filename, times, num in srt:
+            self._lot.counter.total = num
+            m = self._match_return(self._lot.filename.name)
+            self._lot.equals = dict(m)
             if self._lot.equals:
                 yield self._lot
 
@@ -565,7 +620,6 @@ def recursive_dir(dir_name):
 
 if __name__ == '__main__':
     # Todo: Требуется окончательная проверка.
-    #  Проверить все глобальные переменные. DELETE_ALL_OLD - вроде и не нужно! Проверить остальные!
 
     START_FOLDER_NAME, folder, NAME_RULE, NAME_MOVE_DIR, \
         NAME_LOG, append_log, size_log, console_out = parse_arg()
