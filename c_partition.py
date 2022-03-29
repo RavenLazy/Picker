@@ -44,7 +44,6 @@ import datetime
 import pathlib
 import argparse
 import shutil
-from itertools import tee
 
 CREATION_TIME = 0
 MODIFICATION_TIME = 1
@@ -297,9 +296,8 @@ def difference_date(date):
 
 
 def replace_template(pat, item):
-    # Подменяем знаки из item в знаки из pat
-    items = item
-    for elem in items:
+    # Символы в item меняем на подстановочные знаки в pat
+    for elem in item:
         for key, value in pat.items():
             elem = elem.replace(key, value)
         yield elem
@@ -406,12 +404,12 @@ class Job:
         return ret
 
     def include(self):
-        self.counter.files += 1
+        # self.counter.files += 1
         return delta("!", self.equals, self.filename, self.max_time) or delta("+", self.equals, self.filename)
 
     def is_dir(self):
         if self.filename.is_dir():
-            self.counter.folder += 1
+            # self.counter.folder += 1
             return True
         return False
 
@@ -482,6 +480,10 @@ class FStat:
         else:
             self._lot = Job(rule)
 
+        self.count = Counter()
+        self.max_time = 0
+        self.type_time = type_time
+
         self._lot.type_time = type_time
         self.is_max = False
         if isinstance(rule, Job):
@@ -507,6 +509,7 @@ class FStat:
         write_log(self._lot.counter)
 
     def get_counter(self):
+        self._lot.counter += self.count
         return self._lot.counter
 
     @staticmethod
@@ -549,6 +552,38 @@ class FStat:
             replace_template({"+": "[+]", "*": r".*", "!": "[!]", "@": "[@]", "?": "."}, self._lst_key)) + "$)")
         return self
 
+    def get_count_folder(self, elem: pathlib.Path):
+        """Считаем количество файлов и папок. Получаем дату самого свежего файла.
+
+        Returns:
+            имя, максимальное время файлов, общее количество, количество файлов, количество папок
+        """
+        max_name = None
+        itr = []
+        for files in sorted(elem.iterdir(), key=lambda x: x.is_file()):
+            if IS_OLD:
+                self._lot = JobOld(files)
+            else:
+                self._lot = Job(files)
+            self.count.total += 1
+            self._lot.equals = dict(self._match_return(self._lot.filename.name))
+
+            if self._lot.filename.is_file():
+                self.count.files += 1
+                time = return_time_file(self._lot.filename, MODIFICATION_TIME)
+                if time > self.max_time:
+                    self.max_time = time
+                    max_name = self._lot
+            else:
+                self.count.folder += 1
+
+            if self._lot.equals:
+                itr.append(self._lot)
+
+        if delta('!', self._lot.equals, max_name, self.max_time) is False:
+            itr = filter(lambda x: x.filename.is_dir(), itr)
+        return iter(itr)
+
     @staticmethod
     def _get_item(elem, last, index=0):
         return elem[last.lastindex - 1][index]
@@ -562,37 +597,37 @@ class FStat:
             keys = self._lst_key[ret.lastindex - 1]
             values = self._lst_value[ret.lastindex - 1]
             yield keys[0], values
-            # yield self._get_item(self._lst_key, ret), (
-            #     self._get_item(self._lst_value, ret),
-            #     {True: "L", False: "U"}.get(self._get_item(self._lst_value, ret, 1), True))
 
     def iterdir(self):
         # Если is_range_max равно False, то все файлы в этой папке можно пропустить! Оставить только
         # проход по вложенным папкам!
-        is_range_max = True
         # Todo: Добавить функцию, чтобы возвращала общий подсчет папок и файлов при итерации
-        srt = ((elem, return_time_file(elem, MODIFICATION_TIME), num) for num, elem in
-               enumerate(sorted(self.directory.iterdir(), key=lambda x: x.is_file()), start=1))
-        if self.is_max:
-            self._lot.max_time = max([return_time_file(x, self._lot.type_time)
-                                      for x in self.directory.iterdir() if x.is_file()] or [CURRENT_DATE])
-            srt, srt_copy, for_count = tee(srt, 3)
-            pth, max_time = max(srt, key=lambda x: x[1] if x[0].is_file() else 0, default=(None, CURRENT_DATE))
-            if pth:
-                match = dict(self._match_return(pth.name))
-                is_range_max = delta("!", match, pth, max_time)
-                if is_range_max:
-                    srt = srt_copy
-                else:
-                    srt = ((elem, times, num) for elem, times, num in srt_copy if elem.is_dir())
-
-        self._lot.deep = self.deep
-        for self._lot.filename, times, num in srt:
-            self._lot.counter.total = num
-            m = self._match_return(self._lot.filename.name)
-            self._lot.equals = dict(m)
-            if self._lot.equals:
-                yield self._lot
+        # srt = (elem for elem in get_count_folder(self.directory))
+        srt = self.get_count_folder(self.directory)
+        return srt
+        # for_count, srt = tee(srt)
+        #
+        # if self.is_max:
+        #     self._lot.max_time = max([return_time_file(x, self._lot.type_time)
+        #                               for x in self.directory.iterdir() if x.is_file()] or [CURRENT_DATE])
+        #     srt, srt_copy = tee(srt, 3)
+        #     pth, max_time, *_ = max(srt, key=lambda x: x[1])
+        #     if pth:
+        #         match = dict(self._match_return(pth.name))
+        #         is_range_max = delta("!", match, pth, max_time)
+        #         if is_range_max:
+        #             srt = srt_copy
+        #         else:
+        #             srt = ((elem, *_) for elem, *_ in srt_copy if elem.is_dir())
+        #
+        # self._lot.deep = self.deep
+        # _, self._lot.max_time, self._lot.counter.total, self._lot.counter.files, self._lot.counter.folder = \
+        #     [elem for elem in for_count][-1]
+        # for self._lot.filename, *_ in srt:
+        #     m = self._match_return(self._lot.filename.name)
+        #     self._lot.equals = dict(m)
+        #     if self._lot.equals:
+        #         yield self._lot
 
 
 def recursive_dir(dir_name):
@@ -607,9 +642,11 @@ def recursive_dir(dir_name):
                     if elem.is_fast_date():
                         elem.del_dir()
                     continue
+                elem.deep = rules.deep
                 count += recursive_dir(elem)
                 elem.empty()
                 continue
+            elem.max_time = rules.max_time
             if elem.include():
                 elem.work_file()
 
