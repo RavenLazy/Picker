@@ -37,7 +37,6 @@
 #     файлами или установленная программа.
 #     Имеет приоритет над <!>
 # -----------------------------------------------------------------------------------
-
 import sys
 import re
 import datetime
@@ -57,7 +56,11 @@ NAME_RULE = ".rule"
 NAME_PATH = ".path"
 ERROR_LOG = "error.log"
 
-START_FOLDER_NAME = pathlib.Path.cwd()
+if sys.platform == "win32":
+    START_FOLDER_NAME = pathlib.Path.cwd()
+else:
+    START_FOLDER_NAME = pathlib.Path('/mnt/NotPublic')
+
 CURRENT_DATE = datetime.datetime.now().replace(second=0, microsecond=0).timestamp()
 
 MAIN_EXCLUDE = [NAME_RULE, NAME_PATH]
@@ -70,7 +73,7 @@ list_includes_znak = ("@", "!", "+")
 compile_rule = re.compile(r"[:]")
 old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 
-counter_text = ("Объектов: ", "Количество папок: ", "Учтенных файлов: ", "Пропущено: ",
+counter_text = ("Объектов: ", "Количество папок: ", "Количество файлов: ", "Пропущено файлов: ", "Пропущено папок:",
                 "Перемещено: ", "Удалено файлов: ", "Удалено папок: ")
 
 
@@ -86,6 +89,7 @@ def old_default_rule(path: pathlib.Path):
 
 
 def add_in_list_set(array: list, text: str):
+    """Создаем список с неповторяющимися элементами"""
     if text not in array:
         return array + [text]
     return array
@@ -124,6 +128,7 @@ def return_list(text, folders, deep=False):
 
 
 def return_list_main(elem: argparse.Namespace):
+    """Для создания списка из аргументов командной строки"""
     for item in elem.__dict__.values():
         if type(item) == list and len(item) > 0:
             vv = []
@@ -161,10 +166,6 @@ def parse_arg():
 
     arg.add_argument("--rule", "-r", type=str, default=NAME_RULE, nargs=1, metavar=".rule",
                      help=f"Имя файла с правилами анализа: По умолчанию: {NAME_RULE!r}")
-
-    # arg.add_argument("--delete_old", '-d', action="store_true", default=DELETE_ALL_OLD,
-    #                  help=f"Удаляем все старые файлы из папки переноса. Анализируется только основная папка. "
-    #                       f"По умолчанию, анализируется каждый файл.")
 
     arg.add_argument("--name_old", "-n_o", nargs=1, type=str, default=NAME_MOVE_DIR,
                      metavar=f"{NAME_MOVE_DIR!r}",
@@ -239,32 +240,24 @@ def log():
 
 
 def write_log(text, n_log=None):
-    if n_log is None:
-        n_log = NAME_LOG
-    lines = type(text) == list
-    #  Выводим текст в консоль
-    if console_out:
-        if lines:
-            print(*text, sep="\n")
-        else:
-            print(text)
-
-    #  Выводим текст в файл
-    if n_log:
-        with open(n_log, "a") as file:
+    if len(text) > 0:
+        if n_log is None:
+            n_log = NAME_LOG
+        lines = type(text) == list
+        #  Выводим текст в консоль
+        if console_out:
             if lines:
-                file.writelines([f"{line}\n" for line in text])
+                print(*text, sep="\n")
             else:
-                file.write(text + '\n')
+                print(text)
 
-
-def round_time(x: datetime.datetime.second):
-    hour_in_seconds = 60 * 60
-    half_hour_in_seconds = 60 * 30
-    if x % hour_in_seconds > half_hour_in_seconds:
-        return ((x // hour_in_seconds) + 1) * hour_in_seconds
-    else:
-        return (x // hour_in_seconds) * hour_in_seconds
+        #  Выводим текст в файл
+        if n_log:
+            with open(n_log, "a") as file:
+                if lines:
+                    file.writelines([f"{line}\n" for line in text])
+                else:
+                    file.write(text + '\n')
 
 
 def return_time_file(name: pathlib.Path, type_time):
@@ -281,18 +274,11 @@ def revert_rules(elem: dict):
 
     # Переводим секунды в корректное время
     if len(elem) == 0:
-        return []
-
+        return {}
     for znak, (seconds, lock, deep) in elem.items():
         _n, _d = min(_mn([seconds // 31536000, seconds // 2592000, seconds // 86400, seconds // 3600]),
                      default=(0, "H:U"))
-        _ret = f"{znak}*:{_n}{_d}"
-        yield _ret
-
-
-def difference_date(date):
-    # Разница между текущим и заданным временем.
-    return CURRENT_DATE - date
+        yield f"{znak}*:{_n}{_d}"
 
 
 def replace_template(pat, item):
@@ -319,15 +305,16 @@ def normal_date(item: str):
                            "y": 31557600}.get(codes.lower(), 0)
 
 
-def delta(znak, equals, filename, max_time=CURRENT_DATE):
-    fl = equals.get(znak, False)
-    if fl is False:
-        return {znak in list_includes_znak: False, znak == "-": True}[True]
-    date, *_ = fl
-    if znak == "!":
-        return int(CURRENT_DATE - max_time) > date
-
-    return int(CURRENT_DATE - return_time_file(filename, MODIFICATION_TIME)) > date
+def get_count(elem: pathlib.Path):
+    ret = Counter()
+    if elem.is_dir():
+        ret.total = len(obj := [(files, files.is_file()) for files in elem.iterdir()])
+        ret.files = len([x for x in obj if x[1]])
+        ret.folder = ret.total - ret.files
+    else:
+        ret.total = 1
+        ret.files = 1
+    return ret
 
 
 class Counter:
@@ -337,19 +324,22 @@ class Counter:
     - total: Всего объектов в папке\n
     - folder: Количество папок\n
     - files: Файлы дошедшие до проверки include\n
-    - exclude: Пропущено файлов\n
+    - exclude_files: Пропущено файлов\n
+    - exclude_folders: Пропущено папок\n
     - move_object: Перемещенных объектов\n
     - delete_files: Удалено файлов\n
     - delete_folders: Удалено папок\n
     """
 
-    __slots__ = ("total", "folder", "files", "exclude", "move_object", "delete_files", "delete_folders")
+    __slots__ = ("total", "folder", "files", "exclude_files", "exclude_folders", "move_object",
+                 "delete_files", "delete_folders")
 
     def __init__(self):
         self.total = 0  # Всего объектов в папке
         self.folder = 0  # Количество папок
         self.files = 0  # Файлы дошедшие до проверки include
-        self.exclude = 0  # Пропущено файлов
+        self.exclude_files = 0  # Пропущено файлов
+        self.exclude_folders = 0  # Пропущено папок
         self.move_object = 0  # Перемещенных объектов
         self.delete_files = 0  # Удалено файлов
         self.delete_folders = 0  # Удалено папок
@@ -367,157 +357,131 @@ class Counter:
         return '\n'.join(
             [f"{key}{value}" for key, value in zip(counter_text, [self.__getattribute__(x) for x in self.__slots__])])
 
+    def __len__(self):
+        return len(self.__slots__)
 
-class Job:
-    __slots__ = ("filename", "equals", "move_dir", "is_max", "type_time", "max_time", "counter", "log", "deep")
 
-    def __init__(self, lots):
-        if isinstance(lots, Job):
-            self.filename = lots.filename
-            self.deep = lots.deep
+class Analyze:
+
+    __slots__ = ("folders", "deep", "equals", "lock", "count", "rule")
+
+    def __init__(self, files):
+        """
+
+        :type files: pathlib.Path | Analyze
+        """
+        if isinstance(files, Analyze):
+            self.folders = files.folders
+            self.deep = files.deep
+            self.equals = revert_rules(files.equals)
+            self.lock = files.lock
+            self.count = files.count
+            self.rule = files.rule
         else:
-            self.filename = pathlib.Path(lots)
+            self.folders = pathlib.Path(files)
             self.deep = []
-        self.equals = {}
-        self.move_dir: str | pathlib.Path = ''
-        self.is_max = False
-        self.max_time = CURRENT_DATE
-        self.type_time: int = MODIFICATION_TIME
-        self.counter = Counter()
-        self.log = []
-
-    def __str__(self):
-        return self.filename.as_posix()
+            self.equals = {}
+            self.lock = False
+            self.count = get_count(self.folders)
+            self.rule = {}
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({self.filename!r})"
+        return f"{self.folders.as_posix()!r}, deep={self.deep}, equals={self.equals}, lock={self.lock}\n{self.rule}\n"
 
-    @staticmethod
-    def del_or_move(foo, *args, **kwargs):
-        foo(*args, **kwargs)
-        return 1
 
-    def exclude(self):
-        ret = not delta("-", self.equals, self.filename)
-        if ret:
-            self.counter.exclude += 1
+def delta(znak, elem: Analyze | dict, max_time=None):
+    if isinstance(elem, dict):
+        fl = elem.get(znak, False)
+    else:
+        fl = elem.equals.get(znak, False)
+    if fl is False:
+        return False
+    date, *_ = fl
+    if max_time:
+        return int(CURRENT_DATE - max_time) > date
+    ret = int(CURRENT_DATE - return_time_file(elem.folders, MODIFICATION_TIME))
+    return ret <= date if znak == '-' else ret > date
+
+
+class Deleter:
+    def __new__(cls, obj: Analyze, old_dir: pathlib.Path, count: Counter, *args):
+        if obj.folders.is_dir():
+            ret = cls.work_folder(obj, count)
+        else:
+            ret = cls.work_files(obj, old_dir, count)
         return ret
 
-    def include(self):
-        # self.counter.files += 1
-        return delta("!", self.equals, self.filename, self.max_time) or delta("+", self.equals, self.filename)
-
-    def is_dir(self):
-        if self.filename.is_dir():
-            # self.counter.folder += 1
-            return True
+    @classmethod
+    def work_folder(cls, elem: Analyze, count: Counter):
+        ss = elem.count.files - (elem.count.move_object + elem.count.delete_files) + \
+             elem.count.folder - elem.count.delete_folders
+        if (is_fast := elem.rule["@"]) or (ss == 0 and elem.lock is False):
+            fast_deleter(elem)
+            count.delete_folders += 1
+            if is_fast:
+                txt = f"Удаление папки с содержимым: {elem.folders.as_posix()!r}"
+            else:
+                txt = f"Удаляем папку: {elem.folders.as_posix()!r}"
+            return txt, count
         return False
 
-    def work_file(self):
-        f"""
-        Переносим файл в папку Old {NAME_MOVE_DIR}
-        :return: bool
-        """
-        move_files = self.move_dir.joinpath(self.filename.name)
-        self.log.append(f"Время {fullpath.joinpath(self.filename.name).as_posix()!r} вышло за заданный диапазон. "
-                        f"Переносим в {move_files.as_posix()!r}")
-        if not self.move_dir.exists():
-            self.move_dir.mkdir(parents=True)
-        self.counter.move_object += self.del_or_move(self.filename.replace, move_files)
-        return True
-
-    def _is_lock(self):
-        lock: str
-        _, lock, _ = zip(*self.equals.values())
-        if any(lock):
-            return True
+    @classmethod
+    def work_files(cls, elem: Analyze, old: pathlib.Path, count: Counter):
+        if (is_max := elem.rule["!"] is False) or elem.rule["+"]:
+            if IS_OLD:
+                delete(elem)
+                count.delete_files += 1
+                return f"Удаляем файл: {elem.folders.as_posix()!r}", count
+            replace(elem, old)
+            count.move_object += 1
+            if is_max:
+                txt = f"Групповое перемещение: {elem.folders.as_posix()!r}"
+            else:
+                txt = f"Перемещаем файл: {elem.folders.as_posix()!r}"
+            return txt, count
         return False
 
-    def del_dir(self):
-        """
-        Удаляем папку
-        """
-        self.log.append(f'Удаляем папку {self.filename}')
-        self.counter.delete_folders += self.del_or_move(shutil.rmtree, self.filename.as_posix(), ignore_errors=True)
 
-    def is_fast_date(self):
-        fast = delta("@", self.equals, self.filename)
-        return fast
-
-    def is_fast(self):
-        fast = self.equals.get("@") is not None and self._is_lock() is False
-        return fast
-
-    def empty(self):
-        if self.filename.is_dir():
-            full = any((x for x in self.filename.iterdir())) or self._is_lock()
-            if full:
-                return False
-            self.del_dir()
-            return True
+def fast_deleter(elem: Analyze):
+    # shutil.rmtree(elem.folders.as_posix(), ignore_errors=True)
+    return f"Удаляем папку: {elem.folders}"
 
 
-class JobOld(Job):
+def delete(elem: Analyze):
+    # elem.folders.unlink(missing_ok=True)
+    return f"Удаляем файл: {elem.folders}"
 
-    def work_file(self):
-        """
-        Удаляем файл или папку.
-        """
-        self.log.append(f"{self.filename.as_posix()!r} Время хранения истекло - удаляем!")
-        if self.filename.is_file():
-            self.counter.delete_files += self.del_or_move(self.filename.unlink, missing_ok=True)
-        else:
-            self.counter.delete_folders += self.del_or_move(self.filename.rmdir)
-        return True
+
+def replace(elem: Analyze, old_dir: pathlib.Path):
+    if old_dir.exists() is False:
+        old_dir.mkdir(parents=True)
+    # elem.folders.replace(old_dir)
+    return f"Перемещаем файл: {elem.folders}"
 
 
 class FStat:
     """Обработка путей"""
 
-    def __init__(self, rule: Job | str, type_time=MODIFICATION_TIME):
-        if IS_OLD:
-            self._lot = JobOld(rule)
-        else:
-            self._lot = Job(rule)
+    def __init__(self, rule: Analyze | str):
 
-        self.count = Counter()
         self.max_time = 0
-        self.type_time = type_time
-
-        self._lot.type_time = type_time
-        self.is_max = False
-        if isinstance(rule, Job):
-            self.directory = pathlib.Path(rule.filename)
-            self._parent = revert_rules(rule.equals)
-            self.is_max = len(rule.equals.get("!", [])) > 0
-            self.deep = rule.deep
-        else:
-            self.directory = pathlib.Path(rule)
-            self._parent = []
-            self.deep = []
-        self._lot.move_dir = MOVE_OLD / self.directory.as_posix().replace(f"{START_FOLDER_NAME.as_posix()}/", "")
+        self.parent_rule = Analyze(rule)
+        self.count = self.parent_rule.count
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_val:
             write_log([exc_type, exc_tb, exc_val], NAME_LOG or ERROR_LOG)
             return False
-        txt = ' Ищу в: ' + f"{self.directory.as_posix()!r} "
-        write_log(f"{txt:-^100}")
-        if self._lot.log:
-            write_log(self._lot.log)
-            write_log('=' * 100)
-        write_log(self._lot.counter)
 
     def get_counter(self):
-        self._lot.counter += self.count
-        return self._lot.counter
+        return self.count
 
     @staticmethod
     def _add_znak(item, znak):
         return list(map(lambda x: znak + x if x[0] not in list_includes_znak else x, item))
 
     @staticmethod
-    def get_deep(dp, rule_text):
+    def get_deep(rule_text, dp):
         tmp = []
         rule_text += [elem for elem in dp]
         if len(rule_text) == 0:
@@ -541,54 +505,24 @@ class FStat:
         # Читаем файл с правилами, если найден, добавляем правила по умолчанию.
         # На выходе получаем список кортежей с дельта-временем, определением можно ли удалить папку и именем этой папки
 
-        rules = self.directory.joinpath(NAME_RULE)
+        rules = self.parent_rule.folders.joinpath(NAME_RULE)
         rule_text = (rules.read_text(encoding="utf-8").splitlines() if rules.exists() else [])
-        rule_text, deep = zip(*self.get_deep(self.deep, rule_text))
-        self.deep = list(filter(len, deep))
+        rule_text, deep = zip(*self.get_deep(rule_text, self.parent_rule.deep))
+        self.parent_rule.deep = list(filter(len, deep))
         rule_text = list(filter(len, rule_text))
-        rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-") + self._add_znak(self._parent, "+")
-        self._lst_key, self._lst_value = zip(*return_list(rule_text, START_FOLDER_NAME.joinpath(self.directory)))
+        rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-") + self._add_znak(
+            self.parent_rule.equals, "+")
+        self._lst_key, self._lst_value = zip(*return_list(rule_text,
+                                                          START_FOLDER_NAME.joinpath(self.parent_rule.folders)))
         self._rules_compile_new = re.compile("(" + "$)|(".join(
             replace_template({"+": "[+]", "*": r".*", "!": "[!]", "@": "[@]", "?": "."}, self._lst_key)) + "$)")
         return self
-
-    def get_count_folder(self, elem: pathlib.Path):
-        """Считаем количество файлов и папок. Получаем дату самого свежего файла.
-
-        Returns:
-            имя, максимальное время файлов, общее количество, количество файлов, количество папок
-        """
-        max_name = None
-        itr = []
-        for files in sorted(elem.iterdir(), key=lambda x: x.is_file()):
-            if IS_OLD:
-                self._lot = JobOld(files)
-            else:
-                self._lot = Job(files)
-            self.count.total += 1
-            self._lot.equals = dict(self._match_return(self._lot.filename.name))
-
-            if self._lot.filename.is_file():
-                self.count.files += 1
-                time = return_time_file(self._lot.filename, MODIFICATION_TIME)
-                if time > self.max_time:
-                    self.max_time = time
-                    max_name = self._lot
-            else:
-                self.count.folder += 1
-
-            if self._lot.equals:
-                itr.append(self._lot)
-
-        if delta('!', self._lot.equals, max_name, self.max_time) is False:
-            itr = filter(lambda x: x.filename.is_dir(), itr)
-        return iter(itr)
 
     @staticmethod
     def _get_item(elem, last, index=0):
         return elem[last.lastindex - 1][index]
 
-    def _match_return(self, elem):
+    def _match_return(self, elem: str):
         znak = ["-", "@", "+", "!"]
         for z in znak:
             ret = self._rules_compile_new.match(z + elem)
@@ -598,58 +532,71 @@ class FStat:
             values = self._lst_value[ret.lastindex - 1]
             yield keys[0], values
 
+    def sort(self, elem: pathlib.Path):
+        if elem.is_file():
+            c_date = return_time_file(elem, MODIFICATION_TIME)
+            self.max_time = max([self.max_time, c_date])
+            return CURRENT_DATE - c_date
+        else:
+            return -1
+
+    @staticmethod
+    def reduce(elem: pathlib.Path, files, folders):
+        a = {True: (1, 0), False: (0, 1)}[elem.is_file()]
+        return map(sum, zip(a, (files, folders)))
+
+    def get_bool_match(self, obj: Analyze):
+        """
+
+        :return: exclude, plus, max_files, fast_folder
+        """
+        exclude = delta("-", obj)
+        plus = delta("+", obj)
+        fast_folder = delta("@", obj)
+        no_max = not delta("!", obj, self.max_time)
+        return {"-": exclude, "+": plus, "!": no_max, "@": fast_folder}
+
+    def get_info(self, files: pathlib.Path):
+        obj = Analyze(files)
+        obj.equals = dict(self._match_return(obj.folders.name))
+        obj.lock = any([x[1] for x in obj.equals.values()])
+        obj.rule = self.get_bool_match(obj)
+        obj.count = get_count(obj.folders)
+        return obj
+
+    @property
     def iterdir(self):
-        # Если is_range_max равно False, то все файлы в этой папке можно пропустить! Оставить только
-        # проход по вложенным папкам!
-        # Todo: Добавить функцию, чтобы возвращала общий подсчет папок и файлов при итерации
-        # srt = (elem for elem in get_count_folder(self.directory))
-        srt = self.get_count_folder(self.directory)
-        return srt
-        # for_count, srt = tee(srt)
-        #
-        # if self.is_max:
-        #     self._lot.max_time = max([return_time_file(x, self._lot.type_time)
-        #                               for x in self.directory.iterdir() if x.is_file()] or [CURRENT_DATE])
-        #     srt, srt_copy = tee(srt, 3)
-        #     pth, max_time, *_ = max(srt, key=lambda x: x[1])
-        #     if pth:
-        #         match = dict(self._match_return(pth.name))
-        #         is_range_max = delta("!", match, pth, max_time)
-        #         if is_range_max:
-        #             srt = srt_copy
-        #         else:
-        #             srt = ((elem, *_) for elem, *_ in srt_copy if elem.is_dir())
-        #
-        # self._lot.deep = self.deep
-        # _, self._lot.max_time, self._lot.counter.total, self._lot.counter.files, self._lot.counter.folder = \
-        #     [elem for elem in for_count][-1]
-        # for self._lot.filename, *_ in srt:
-        #     m = self._match_return(self._lot.filename.name)
-        #     self._lot.equals = dict(m)
-        #     if self._lot.equals:
-        #         yield self._lot
+        _log = []
+        move_old_dir = MOVE_OLD.joinpath(self.parent_rule.folders.as_posix().replace(
+            f"{START_FOLDER_NAME.as_posix()}/", ""))
+
+        for files in sorted(self.parent_rule.folders.iterdir(), key=self.sort):
+            rules = self.get_info(files)
+            if rules.equals and rules.rule["-"] is False:
+                rules.deep = self.parent_rule.deep
+                if rules.folders.is_dir() and rules.rule["@"] is False:
+                    yield rules
+
+                if deleter := Deleter(rules, move_old_dir, self.count):
+                    txt, self.count = deleter
+                    _log.append(txt)
+                continue
+
+            self.count.exclude_files, self.count.exclude_folders = self.reduce(
+                rules.folders, self.count.exclude_files, self.count.exclude_folders)
+
+        txt = ' Искал в: ' + f"{self.parent_rule.folders.as_posix()!r} "
+        write_log(f"{txt:-^100}")
+        write_log(_log)
+        write_log(self.count)
 
 
 def recursive_dir(dir_name):
     count = Counter()
     with FStat(dir_name) as rules:
-        elem: Job
-        for elem in rules.iterdir():
-            if elem.exclude():
-                continue
-            if elem.is_dir():
-                if elem.is_fast():
-                    if elem.is_fast_date():
-                        elem.del_dir()
-                    continue
-                elem.deep = rules.deep
-                count += recursive_dir(elem)
-                elem.empty()
-                continue
-            elem.max_time = rules.max_time
-            if elem.include():
-                elem.work_file()
-
+        elem: Analyze
+        for elem in rules.iterdir:
+            count += recursive_dir(elem)
         count += rules.get_counter()
 
     return count
