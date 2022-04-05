@@ -73,8 +73,8 @@ list_includes_znak = ("@", "!", "+")
 compile_rule = re.compile(r"[:]")
 old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 
-counter_text = ("Объектов: ", "Количество папок: ", "Количество файлов: ", "Пропущено файлов: ", "Пропущено папок:",
-                "Перемещено: ", "Удалено файлов: ", "Удалено папок: ")
+counter_text = ("Объектов", "Количество папок", "Количество файлов", "Пропущено файлов", "Пропущено папок",
+                "Перемещено", "Удалено файлов", "Удалено папок")
 
 
 def old_default_rule(path: pathlib.Path):
@@ -355,7 +355,8 @@ class Counter:
 
     def __str__(self):
         return '\n'.join(
-            [f"{key}{value}" for key, value in zip(counter_text, [self.__getattribute__(x) for x in self.__slots__])])
+            [f"{key.ljust(18):s}:  {value:d}" for key, value in
+             zip(counter_text, [self.__getattribute__(x) for x in self.__slots__])])
 
     def __len__(self):
         return len(self.__slots__)
@@ -473,9 +474,6 @@ class FStat:
             write_log([exc_type, exc_tb, exc_val], NAME_LOG or ERROR_LOG)
             return False
 
-    def get_counter(self):
-        return self.count
-
     @staticmethod
     def _add_znak(item, znak):
         return list(map(lambda x: znak + x if x[0] not in list_includes_znak else x, item))
@@ -585,10 +583,7 @@ class FStat:
             self.count.exclude_files, self.count.exclude_folders = self.reduce(
                 rules.folders, self.count.exclude_files, self.count.exclude_folders)
 
-        txt = ' Искал в: ' + f"{self.parent_rule.folders.as_posix()!r} "
-        write_log(f"{txt:-^100}")
-        write_log(_log)
-        write_log(self.count)
+        write_log([f"{' Поиск в: ' + f'{self.parent_rule.folders.as_posix()!r}' + ' ':-^100}", *_log, self.count])
 
 
 def recursive_dir(dir_name):
@@ -597,7 +592,7 @@ def recursive_dir(dir_name):
         elem: Analyze
         for elem in rules.iterdir:
             count += recursive_dir(elem)
-        count += rules.get_counter()
+        count += rules.count
 
     return count
 
@@ -614,8 +609,8 @@ if __name__ == '__main__':
     except AttributeError:
         pass
     tm = datetime.datetime.fromtimestamp(CURRENT_DATE)
-    write_log(f"{' '.join([' Start scan at:', tm.strftime('%d-%m-%Y %H:%M'), ' ']):-^100}")
     write_log(f"Current platform: {sys.platform}")
+    write_log(f"{' Начато в: ' + tm.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
     MOVE_MAIN_OLD = START_FOLDER_NAME.joinpath(NAME_MOVE_DIR)
     old_default_rule(MOVE_MAIN_OLD)
     MOVE_OLD = MOVE_MAIN_OLD.joinpath(STR_NOW_DATE)
@@ -627,15 +622,14 @@ if __name__ == '__main__':
         if l_p.exists():
             IS_OLD = l_p.name == MOVE_MAIN_OLD.name
             total_parts = recursive_dir(l_p)
-            s = ' '.join(['*', '[\'' + fullpath.as_posix() + '\']', '*'])
-            write_log(f"{s:*^100}\n{total_parts}")
+            write_log(f"{' Итог: [' + f'{fullpath.as_posix()!r}' + '] ':*^100}\n{total_parts}")
             total_count += total_parts
         else:
             write_log(f"{fullpath.as_posix()!r} заданная папка не найдена")
 
-    write_log(f"{'#' * 100}\n{' Всего: ':-^100}\n{total_count}")
+    write_log(f"{'#'*100}\n{' Всего: ':-^100}\n{total_count}")
     tm_stop = datetime.datetime.now()
+    write_log(f"{' Закончено в: ' + tm_stop.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
     tz = datetime.timezone(datetime.timedelta(hours=0))
-    write_log(f"{' '.join([' Stop scan at:', tm_stop.strftime('%d-%m-%Y %H:%M'), ' ']):-^100}")
     write_log(datetime.datetime.fromtimestamp((tm_stop - tm).total_seconds(),
-                                              tz=tz).strftime("Часов: %H Минут: %M Секунд: %S Микросекунд: %f"))
+                                              tz=tz).strftime("%H: час., %M: мин., %S: сек., %f: микросек."))
