@@ -44,6 +44,8 @@ import pathlib
 import argparse
 import shutil
 
+import mlist as mlist
+
 CREATION_TIME = 0
 MODIFICATION_TIME = 1
 ACCESS_TIME = 2
@@ -56,10 +58,7 @@ NAME_RULE = ".rule"
 NAME_PATH = ".path"
 ERROR_LOG = "error.log"
 
-if sys.platform == "win32":
-    START_FOLDER_NAME = pathlib.Path.cwd()
-else:
-    START_FOLDER_NAME = pathlib.Path('/mnt/NotPublic')
+
 
 CURRENT_DATE = datetime.datetime.now().replace(second=0, microsecond=0).timestamp()
 
@@ -152,76 +151,169 @@ def for_size(item):
     return {"m": size * (coefficient ** 2), "k": size * coefficient, "b": size * 1}.get(ident.lower(), size)
 
 
-def parse_arg():
+def create_path(namespace, values):
+    folder = getattr(namespace, 'folder')
+    for f in folder:
+        for v in values:
+            r = f.joinpath(v)
+            yield r
+
+
+def flatten(values):
+    s = []
+    for x in values:
+        s.extend(x)
+    return s
+
+
+def read_path(namespace, values):
+    for files in create_path(namespace, [values]):
+        if files.exists():
+            with open(files, 'r') as f:
+                yield create_path(namespace, f.read().splitlines())
+    return None
+
+
+class ActionFile(argparse.Action):
+    def __init__(self, option_strings, dest, nargs=None, **kwargs):
+        super().__init__(option_strings, dest, nargs, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print('%r %r %r' % (namespace, values, option_string))
+        setattr(namespace, 'Search', flatten(read_path(namespace, values)))
+
+
+class ActionSearch(ActionFile):
+
+    def __call__(self, parser, namespace, values: list, option_string=None):
+        print('%r %r %r' % (namespace, values, option_string))
+
+        values = self.create_path(namespace, values)
+        if atr := getattr(namespace, 'Search'):
+            if type(atr) == list:
+                _, values = atr.extend(values), atr
+        setattr(namespace, self.dest, list(values))
+
+
+def alternative_parsers():
+    # Todo: Добавить обработку .rule.
+    #  Продумать обработку rule, search с помощью класса Action
+
     arg = argparse.ArgumentParser(description="Перенос старых файлов в отдельную директорию с сохранением путей",
                                   prog="Trash")
-    group1 = arg.add_mutually_exclusive_group()
-    group2 = arg.add_mutually_exclusive_group()
 
-    arg.add_argument("--parent", "-p", nargs=1, default=START_FOLDER_NAME, metavar=f"{START_FOLDER_NAME.as_posix()!r}",
-                     type=pathlib.Path, help=f"Откуда начинаем искать. По умолчанию папка запуска скрипта.")
+    search_folder = arg.add_mutually_exclusive_group()
 
-    group1.add_argument("--pathname", "-pn", type=str, default=NAME_PATH, nargs=1, metavar=".path",
-                        help=f"Имя файла с папками для поиска. По умолчанию: {NAME_PATH!r}")
+    arg.add_argument("command", metavar="<execute> | <test>", type=str, choices=['execute', 'test'],
+                     help="Выполнение или тестовый прогон.")
 
-    arg.add_argument("--rule", "-r", type=str, default=NAME_RULE, nargs=1, metavar=".rule",
-                     help=f"Имя файла с правилами анализа: По умолчанию: {NAME_RULE!r}")
+    arg.add_argument("-folder", nargs='*', metavar="<start folder name>", required=True, action='extend',
+                     type=pathlib.Path, help=f"Откуда начинаем искать")
 
-    arg.add_argument("--name_old", "-n_o", nargs=1, type=str, default=NAME_MOVE_DIR,
-                     metavar=f"{NAME_MOVE_DIR!r}",
-                     help=f"Имя папки в которую будут переносится старые файлы. По умолчанию: {NAME_MOVE_DIR!r}")
+    search_folder.add_argument("-Search", type=str, action=ActionSearch,
+                               metavar="<Folder1> <Folder2> ... <FolderNNN>", nargs='*',
+                               help=f"Папки поиска.")
+    search_folder.add_argument("-pathname", type=str, default='.path', metavar=".path", action=ActionFile,
+                               help=f"Имя файла с папками для поиска. По умолчанию: <%(default)s>")
 
-    group1.add_argument("-s", "--search", type=str, nargs="+", action="append",
-                        metavar="'Folder/1' 'Folder/2' ...", default=[], help="Папки поиска")
+    arg.add_argument("-rule", default='.rule', action=ActionFile)
+    arg.add_argument("-trash", nargs=1, type=str, default='Trash',
+                     metavar="<'Trash'>",
+                     help=f"Имя папки в которую будут переносится старые файлы. По умолчанию: '%(default)s'")
 
-    group2.add_argument("-l", "--log", action="store_true",
-                        help=f"Разрешить запись лога. Задается без дополнительного аргумента. По умолчанию лог не "
-                             f"пишем. Если разрешена запись, то пишем в {DEFAULT_LOG!r}")
+    group_log = arg.add_subparsers(help='Лог файл')
+    parser_a = group_log.add_parser("log", help="Help: log -h")
+    parser_a.add_argument("-name", default=DEFAULT_LOG, help=f"Имя лог-файла <{DEFAULT_LOG}>")
+    parser_a.add_argument("-size", default=1000, type=for_size, help="Размер лога <1000>")
+    parser_a.add_argument("-append", action="store_true", help="Продолжать дописывать <True>")
 
-    group2.add_argument("-lf", "--log_file", action="store", metavar="log_file.log",
-                        help="Имя файла для записи лога. Если указано будем писать в этот файл. "
-                             "Указывается либо имя файла, либо параметр '-l (--log)'")
+    arg.add_argument("-console", action="store_true", help="Выводить в консоль. По умолчанию <False>")
 
-    arg.add_argument("-al", "--append_log", action="store_false",
-                     help="Начинать писать лог файл заново. По умолчанию: дописывать")
+    arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0')
 
-    arg.add_argument("-sl", "--size_log", type=for_size, default=1000, metavar='1000',
-                     help="Размер лог файла в байтах. При превышении файл будет переименован и создан новый. "
-                          "По умолчанию: 1000 байт. ")
+    # Надо ли писать в лог файл
+    logging = type((arguments := arg.parse_args().__dict__).get("size")) == int
 
-    arg.add_argument("-o", "--out", action="store_false",
-                     help="Выводить информацию в консоль? По умолчанию: Да")
+    # Создаем список папок для поиска. Читаем файл .path или что задано в pathname
+    if arguments['Search'] is None:
+        arguments['Search'] = flatten(read_path(arg.parse_args(), arguments['pathname']))
 
-    arg.add_argument("-V", "--version", action="version", version="%(prog)s 1.0")
+    print(arguments, logging, sep='\n')
+    return arguments, logging
 
-    arg_s = arg.parse_args()
-    start_path: pathlib.Path
 
-    start_path, name_path_file, name_rule_file, name_trash_dir, search_path, is_log_write, \
-        name_log, is_append_log, log_size, is_console_out = return_list_main(arg_s)
-
-    search_path = add_in_list_set(search_path, name_trash_dir)
-    if any([x.count(':') or x.count('/') for x in search_path]):
-        raise ValueError('Путь должен быть относительным. Без слэш и двоеточий')
-
-    if start_path.exists() is False:
-        raise OSError(f"{START_FOLDER_NAME.as_posix()!r} not exists")
-
-    if is_log_write or name_log:
-        name_log = pathlib.Path(name_log or DEFAULT_LOG)
-
-    name_path = search_path or name_path_file
-    ss = []
-    if search_path:
-        ss = [elem[0] if type(elem) == list else elem for elem in name_path]
-    else:
-        _start = start_path.joinpath(name_path)
-        if _start.exists():
-            ss = _start.read_text().splitlines()
-
-    ss = map(start_path.joinpath, ss)
-
-    return start_path, ss, name_rule_file, name_trash_dir, name_log, is_append_log, log_size, is_console_out
+# def parse_arg():
+#     # Todo: Пересмотреть аргументы командной строки
+#
+#     arg = argparse.ArgumentParser(description="Перенос старых файлов в отдельную директорию с сохранением путей",
+#                                   prog="Trash")
+#     group1 = arg.add_mutually_exclusive_group()
+#     group2 = arg.add_mutually_exclusive_group()
+#
+#     arg.add_argument("--parent", "-p", nargs=1, default=START_FOLDER_NAME, metavar=f"{START_FOLDER_NAME.as_posix()!r}",
+#                      type=pathlib.Path, help=f"Откуда начинаем искать. По умолчанию папка запуска скрипта.")
+#
+#     group1.add_argument("--pathname", "-pn", type=str, default=NAME_PATH, nargs=1, metavar=".path",
+#                         help=f"Имя файла с папками для поиска. По умолчанию: {NAME_PATH!r}")
+#
+#     arg.add_argument("--rule", "-r", type=str, default=NAME_RULE, nargs=1, metavar=".rule",
+#                      help=f"Имя файла с правилами анализа: По умолчанию: {NAME_RULE!r}")
+#
+#     arg.add_argument("--name_old", "-n_o", nargs=1, type=str, default=NAME_MOVE_DIR,
+#                      metavar=f"{NAME_MOVE_DIR!r}",
+#                      help=f"Имя папки в которую будут переносится старые файлы. По умолчанию: {NAME_MOVE_DIR!r}")
+#
+#     group1.add_argument("-s", "--search", type=str, nargs="+", action="append",
+#                         metavar="'Folder/1' 'Folder/2' ...", default=[], help="Папки поиска")
+#
+#     group2.add_argument("-l", "--log", action="store_true",
+#                         help=f"Разрешить запись лога. Задается без дополнительного аргумента. По умолчанию лог не "
+#                              f"пишем. Если разрешена запись, то пишем в {DEFAULT_LOG!r}")
+#
+#     group2.add_argument("-lf", "--log_file", action="store", metavar="log_file.log",
+#                         help="Имя файла для записи лога. Если указано будем писать в этот файл. "
+#                              "Указывается либо имя файла, либо параметр '-l (--log)'")
+#
+#     arg.add_argument("-al", "--append_log", action="store_false",
+#                      help="Начинать писать лог файл заново. По умолчанию: дописывать")
+#
+#     arg.add_argument("-sl", "--size_log", type=for_size, default=1000, metavar='1000',
+#                      help="Размер лог файла в байтах. При превышении файл будет переименован и создан новый. "
+#                           "По умолчанию: 1000 байт. ")
+#
+#     arg.add_argument("-o", "--out", action="store_false",
+#                      help="Выводить информацию в консоль? По умолчанию: Да")
+#
+#     arg.add_argument("-V", "--version", action="version", version="%(prog)s 1.0")
+#
+#     arg_s = arg.parse_args()
+#     start_path: pathlib.Path
+#
+#     start_path, name_path_file, name_rule_file, name_trash_dir, search_path, is_log_write, \
+#         name_log, is_append_log, log_size, is_console_out = return_list_main(arg_s)
+#
+#     search_path = add_in_list_set(search_path, name_trash_dir)
+#     if any([x.count(':') or x.count('/') for x in search_path]):
+#         raise ValueError('Путь должен быть относительным. Без слэш и двоеточий')
+#
+#     if start_path.exists() is False:
+#         raise OSError(f"{START_FOLDER_NAME.as_posix()!r} not exists")
+#
+#     if is_log_write or name_log:
+#         name_log = pathlib.Path(name_log or DEFAULT_LOG)
+#
+#     name_path = search_path or name_path_file
+#     ss = []
+#     if search_path:
+#         ss = [elem[0] if type(elem) == list else elem for elem in name_path]
+#     else:
+#         _start = start_path.joinpath(name_path)
+#         if _start.exists():
+#             ss = _start.read_text().splitlines()
+#
+#     ss = map(start_path.joinpath, ss)
+#
+#     return start_path, ss, name_rule_file, name_trash_dir, name_log, is_append_log, log_size, is_console_out
 
 
 def log():
@@ -444,20 +536,22 @@ class Deleter:
 
 
 def fast_deleter(elem: Analyze):
+    """Удаляем папку со всем содержимым"""
     # shutil.rmtree(elem.folders.as_posix(), ignore_errors=True)
-    return f"Удаляем папку: {elem.folders}"
+    pass
 
 
 def delete(elem: Analyze):
+    """Удаляем файл"""
     # elem.folders.unlink(missing_ok=True)
-    return f"Удаляем файл: {elem.folders}"
+    pass
 
 
 def replace(elem: Analyze, old_dir: pathlib.Path):
+    """Перемещаем файл"""
     if old_dir.exists() is False:
         old_dir.mkdir(parents=True)
     # elem.folders.replace(old_dir)
-    return f"Перемещаем файл: {elem.folders}"
 
 
 class FStat:
@@ -600,36 +694,37 @@ def recursive_dir(dir_name):
 if __name__ == '__main__':
     # Todo: Требуется окончательная проверка.
 
-    START_FOLDER_NAME, folder, NAME_RULE, NAME_MOVE_DIR, \
-        NAME_LOG, append_log, size_log, console_out = parse_arg()
+    # START_FOLDER_NAME, folder, NAME_RULE, NAME_MOVE_DIR, \
+    #     NAME_LOG, append_log, size_log, console_out = parse_arg()
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
-    try:
-        if NAME_LOG.exists():
-            log()
-    except AttributeError:
-        pass
-    tm = datetime.datetime.fromtimestamp(CURRENT_DATE)
-    write_log(f"Current platform: {sys.platform}")
-    write_log(f"{' Начато в: ' + tm.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
-    MOVE_MAIN_OLD = START_FOLDER_NAME.joinpath(NAME_MOVE_DIR)
-    old_default_rule(MOVE_MAIN_OLD)
-    MOVE_OLD = MOVE_MAIN_OLD.joinpath(STR_NOW_DATE)
-    total_count = Counter()
-    total_parts = Counter()
-
-    for l_p in folder:
-        fullpath = START_FOLDER_NAME.joinpath(l_p)
-        if l_p.exists():
-            IS_OLD = l_p.name == MOVE_MAIN_OLD.name
-            total_parts = recursive_dir(l_p)
-            write_log(f"{' Итог: [' + f'{fullpath.as_posix()!r}' + '] ':*^100}\n{total_parts}")
-            total_count += total_parts
-        else:
-            write_log(f"{fullpath.as_posix()!r} заданная папка не найдена")
-
-    write_log(f"{'#'*100}\n{' Всего: ':-^100}\n{total_count}")
-    tm_stop = datetime.datetime.now()
-    write_log(f"{' Закончено в: ' + tm_stop.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
-    tz = datetime.timezone(datetime.timedelta(hours=0))
-    write_log(datetime.datetime.fromtimestamp((tm_stop - tm).total_seconds(),
-                                              tz=tz).strftime("%H: час., %M: мин., %S: сек., %f: микросек."))
+    argument, logger = alternative_parsers()
+    # try:
+    #     if NAME_LOG.exists():
+    #         log()
+    # except AttributeError:
+    #     pass
+    # tm = datetime.datetime.fromtimestamp(CURRENT_DATE)
+    # write_log(f"Current platform: {sys.platform}")
+    # write_log(f"{' Начато в: ' + tm.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
+    # MOVE_MAIN_OLD = START_FOLDER_NAME.joinpath(NAME_MOVE_DIR)
+    # old_default_rule(MOVE_MAIN_OLD)
+    # MOVE_OLD = MOVE_MAIN_OLD.joinpath(STR_NOW_DATE)
+    # total_count = Counter()
+    # total_parts = Counter()
+    #
+    # for l_p in folder:
+    #     fullpath = START_FOLDER_NAME.joinpath(l_p)
+    #     if l_p.exists():
+    #         IS_OLD = l_p.name == MOVE_MAIN_OLD.name
+    #         total_parts = recursive_dir(l_p)
+    #         write_log(f"{' Итог: [' + f'{fullpath.as_posix()!r}' + '] ':*^100}\n{total_parts}")
+    #         total_count += total_parts
+    #     else:
+    #         write_log(f"{fullpath.as_posix()!r} заданная папка не найдена")
+    #
+    # write_log(f"{'#'*100}\n{' Всего: ':-^100}\n{total_count}")
+    # tm_stop = datetime.datetime.now()
+    # write_log(f"{' Закончено в: ' + tm_stop.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
+    # tz = datetime.timezone(datetime.timedelta(hours=0))
+    # write_log(datetime.datetime.fromtimestamp((tm_stop - tm).total_seconds(),
+    #                                           tz=tz).strftime("%H: час., %M: мин., %S: сек., %f: микросек."))
