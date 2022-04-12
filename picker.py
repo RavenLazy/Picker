@@ -1,3 +1,5 @@
+#!/usr/local/bin/python3.9
+
 #  coding: utf-8
 
 # -----------------------------------------------------------------------------------
@@ -37,12 +39,13 @@
 #     файлами или установленная программа.
 #     Имеет приоритет над <!>
 # -----------------------------------------------------------------------------------
-import sys
+from sys import platform, exit, argv
 import re
 import datetime
-import pathlib
+from pathlib import Path
 import argparse
-import shutil
+from shutil import rmtree
+import traceback
 
 CREATION_TIME = 0
 MODIFICATION_TIME = 1
@@ -59,14 +62,16 @@ NAME_LOG = "log.log"
 
 CURRENT_DATE = datetime.datetime.now().replace(second=0, microsecond=0).timestamp()
 
-MAIN_EXCLUDE = [NAME_RULE, NAME_PATH]
+PROG = Path(__file__).name
+
+MAIN_EXCLUDE = [NAME_RULE, NAME_PATH, PROG]
 
 list_includes_znak = ("@", "!", "+")
 
 old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 
 counter_text = ("Объектов", "Количество папок", "Количество файлов", "Пропущено файлов", "Пропущено папок",
-                "Перемещено", "Удалено файлов", "Удалено папок")
+                "Перемещено файлов", "Удалено файлов", "Удалено папок")
 
 
 def add_default_rule():
@@ -85,7 +90,7 @@ def add_in_list_set(array: list, text: str):
     return array
 
 
-def decompress(el: list, folders: pathlib.Path, dp: bool):
+def decompress(el: list, folders: Path, dp: bool):
     # Раскладываем время из файла правил
     name: str
     count = 1
@@ -99,7 +104,7 @@ def decompress(el: list, folders: pathlib.Path, dp: bool):
             except ValueError:
                 write_log(f"{item!r} ошибка разметки в списке правил {NAME_RULE!r}."
                           f"\nПапка: {folders.as_posix()!r}.\nСтрока: {count}")
-                sys.exit(1)
+                exit(1)
             lock = False if lock == "U" else True  # True - папка не будет удалена
         count += 1
         yield name, (dates, lock, deep)
@@ -186,15 +191,15 @@ class ActionTrash(ActionFile):
         setattr(namespace, self.dest, values)
 
 
-def rechange(args: argparse.ArgumentParser, line, value):
+def re_change(args: argparse.ArgumentParser, line, value):
     ret = args.parse_args([line.command, line.folder.as_posix(), *value])
     return ret
 
 
 def alternative_parsers():
-
+    prog_name = PROG.split('.py')[0]
     arg = argparse.ArgumentParser(description="Перенос старых файлов в отдельную директорию с сохранением путей",
-                                  prog="Trash")
+                                  prog=prog_name)
 
     search_folder = arg.add_argument_group()
     logged = arg.add_argument_group()
@@ -203,7 +208,7 @@ def alternative_parsers():
                      help="<execute> работа по заданным правилам. <test> прогон по папкам без изменения.")
 
     arg.add_argument("folder", metavar="<start folder name>", action="store",
-                     type=pathlib.Path, help=f"Откуда начинаем искать")
+                     type=Path, help=f"Откуда начинаем искать")
 
     search_folder.add_argument("-Search", type=str, action=ActionSearch,
                                metavar="<Folder1> <Folder2> ... <FolderNNN>",
@@ -218,8 +223,8 @@ def alternative_parsers():
                      help=f"Имя папки в которую будут переносится старые файлы. По умолчанию: %(metavar)s")
 
     logged.add_argument("-log", action="store_true",
-                        help="Включает запись лога. Дополнительные параметры [-name log.log] [-size 1000] [-append]"
-                        "По умолчанию: <%(default)s>")
+                        help="Включает запись лога. Дополнительные параметры [-name log.log] [-size 10000] [-append] "
+                             "По умолчанию: <%(default)s>")
 
     arg.add_argument("-console", action="store_true", help="Выводить в консоль. По умолчанию <%(default)s>")
 
@@ -229,13 +234,13 @@ def alternative_parsers():
     logging: bool
     if logging := arg.parse_known_args()[0].log:
         logged.add_argument("-name", nargs=1, action=ActionTrash, help=f"Имя лог-файла <{NAME_LOG}>")
-        logged.add_argument("-size", default=1000, type=for_size, help="Размер лога <1000>")
-        logged.add_argument("-append", action="store_true", help="Продолжать дописывать <True>")
+        logged.add_argument("-size", default=10000, type=for_size, help="Размер лога <%(default)s>")
+        logged.add_argument("-append", action="store_true", help="Продолжать дописывать <%(default)s>")
 
     command_argument = arg.parse_args()
     # Имя лог файла
     if logging and command_argument.name is None:
-        arg.set_defaults(name=rechange(arg, command_argument, ['-n', NAME_LOG]).name)
+        arg.set_defaults(name=re_change(arg, command_argument, ['-n', NAME_LOG]).name)
 
     # Добавляем имя файла с ошибками
     arg.set_defaults(error_log=command_argument.folder.joinpath(ERROR_LOG))
@@ -243,14 +248,15 @@ def alternative_parsers():
     # Создаем список папок для поиска. Читаем файл .path или что задано в pathname
     if command_argument.Search is None:
         arg.set_defaults(Search=list(
-            *rechange(arg, command_argument, ['-p', '.path']).Search
+            *re_change(arg, command_argument, ['-p', '.path']).Search
         ) or [command_argument.folder])
 
     if command_argument.trash is None:
-        arg.set_defaults(trash=rechange(arg, command_argument, ['-t', NAME_MOVE_DIR]).trash)
+        arg.set_defaults(trash=re_change(arg, command_argument, ['-t', NAME_MOVE_DIR]).trash)
 
     arg.set_defaults(trash_day=(arg.get_default('trash') or command_argument.trash).joinpath(STR_NOW_DATE))
-    arg.set_defaults(Search=arg.get_default("Search") + [arg.get_default("trash") or command_argument.trash])
+    arg.set_defaults(Search=(arg.get_default("Search") or command_argument.Search) + [arg.get_default("trash")
+                                                                                      or command_argument.trash])
     arg.set_defaults(work=command_argument.command == 'execute')
 
     return arg.parse_args()
@@ -260,36 +266,41 @@ def log():
     if arguments.log and arguments.name.exists():
         if arguments.name.stat().st_size >= arguments.size:
             name = arguments.name.as_posix().split(".")[0]
-            fullname = pathlib.Path('-'.join([name, STR_NOW_DATE + arguments.name.suffix]))
+            fullname = Path('-'.join([name, STR_NOW_DATE + arguments.name.suffix]))
             count = 0
             while fullname.exists():
                 count += 1
-                fullname = pathlib.Path(
+                fullname = Path(
                     '-'.join([name, STR_NOW_DATE + f"_{str(count).zfill(3)}{arguments.name.suffix}"]))
             arguments.name.replace(fullname)
 
 
 def write_log(text, err_log=False):
-    name_log = arguments.error_log if err_log else arguments.name
-    if len(text) > 0:
-        lines = type(text) == list
-        #  Выводим текст в консоль
-        if arguments.console:
+    if len(text) == 0:
+        return
+    if err_log:
+        name_log = arguments.error_log
+    else:
+        name_log = getattr(arguments, 'name', None)
+
+    lines = type(text) == list
+    #  Выводим текст в консоль
+    if arguments.console:
+        if lines:
+            print(*text, sep="\n")
+        else:
+            print(text)
+
+    #  Выводим текст в файл
+    if arguments.log or err_log:
+        with open(name_log, "a") as f:
             if lines:
-                print(*text, sep="\n")
+                f.writelines([f"{line}\n" for line in text])
             else:
-                print(text)
-
-        #  Выводим текст в файл
-        if arguments.log or err_log:
-            with open(name_log, "a") as f:
-                if lines:
-                    f.writelines([f"{line}\n" for line in text])
-                else:
-                    f.write(text + '\n')
+                f.write(text + '\n')
 
 
-def return_time_file(name: pathlib.Path, type_time):
+def return_time_file(name: Path, type_time):
     return {ACCESS_TIME: name.stat().st_atime, MODIFICATION_TIME: name.stat().st_mtime,
             CREATION_TIME: name.stat().st_ctime}[type_time]
 
@@ -334,7 +345,7 @@ def normal_date(item: str):
                            "y": 31557600}.get(codes.lower(), 0)
 
 
-def get_count(elem: pathlib.Path):
+def get_count(elem: Path):
     ret = Counter()
     if elem.is_dir():
         ret.total = len(obj := [(files, files.is_file()) for files in elem.iterdir()])
@@ -392,13 +403,12 @@ class Counter:
 
 
 class Analyze:
-
     __slots__ = ("folders", "deep", "equals", "lock", "count", "rule")
 
     def __init__(self, files):
         """
 
-        :type files: pathlib.Path | Analyze
+        :type files: Path | Analyze
         """
         if isinstance(files, Analyze):
             self.folders = files.folders
@@ -408,7 +418,7 @@ class Analyze:
             self.count = files.count
             self.rule = files.rule
         else:
-            self.folders = pathlib.Path(files)
+            self.folders = Path(files)
             self.deep = []
             self.equals = {}
             self.lock = False
@@ -419,7 +429,7 @@ class Analyze:
         return f"{self.folders.as_posix()!r}, deep={self.deep}, equals={self.equals}, lock={self.lock}\n{self.rule}\n"
 
 
-def delta(znak, elem: Analyze | dict, max_time=None):
+def delta(znak, elem, max_time=None):
     if isinstance(elem, dict):
         fl = elem.get(znak, False)
     else:
@@ -434,7 +444,7 @@ def delta(znak, elem: Analyze | dict, max_time=None):
 
 
 class Deleter:
-    def __new__(cls, obj: Analyze, old_dir: pathlib.Path, count: Counter, *args):
+    def __new__(cls, obj: Analyze, old_dir: Path, count: Counter, *args):
         if obj.folders.is_dir():
             ret = cls.work_folder(obj, count)
         else:
@@ -456,7 +466,7 @@ class Deleter:
         return False
 
     @classmethod
-    def work_files(cls, elem: Analyze, old: pathlib.Path, count: Counter):
+    def work_files(cls, elem: Analyze, old: Path, count: Counter):
         if (is_max := elem.rule["!"] is False) or elem.rule["+"]:
             if arguments.is_old:
                 delete(elem)
@@ -475,7 +485,7 @@ class Deleter:
 def fast_deleter(elem: Analyze):
     """Удаляем папку со всем содержимым"""
     if arguments.work:
-        shutil.rmtree(elem.folders.as_posix(), ignore_errors=True)
+        rmtree(elem.folders.as_posix(), ignore_errors=True)
 
 
 def delete(elem: Analyze):
@@ -484,7 +494,7 @@ def delete(elem: Analyze):
         elem.folders.unlink(missing_ok=True)
 
 
-def replace(elem: Analyze, old_dir: pathlib.Path):
+def replace(elem: Analyze, old_dir: Path):
     """Перемещаем файл"""
     if arguments.work:
         if old_dir.exists() is False:
@@ -495,7 +505,7 @@ def replace(elem: Analyze, old_dir: pathlib.Path):
 class FStat:
     """Обработка путей"""
 
-    def __init__(self, rule: Analyze | str):
+    def __init__(self, rule):
 
         self.max_time = 0
         self.parent_rule = Analyze(rule)
@@ -503,7 +513,8 @@ class FStat:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_val:
-            write_log([exc_type, exc_tb, exc_val], err_log=True)
+            s = traceback.extract_tb(exc_tb)
+            write_log([f"{STR_NOW_DATE} ::{self.parent_rule.folders}\n{traceback.format_list(s)[0]}{exc_val}", "^" * 100], err_log=True)
             return False
 
     @staticmethod
@@ -534,7 +545,7 @@ class FStat:
     def __enter__(self):
         # Читаем файл с правилами, если найден, добавляем правила по умолчанию.
         # На выходе получаем список кортежей с дельта-временем, определением можно ли удалить папку и именем этой папки
-        rules = self.parent_rule.folders.joinpath(NAME_RULE)
+        rules = self.parent_rule.folders.joinpath(arguments.rule)
         rule_text = (rules.read_text(encoding="utf-8").splitlines() if rules.exists() else [])
         rule_text, deep = zip(*self.get_deep(rule_text, self.parent_rule.deep))
         self.parent_rule.deep = list(filter(len, deep))
@@ -561,7 +572,7 @@ class FStat:
             values = self._lst_value[ret.lastindex - 1]
             yield keys[0], values
 
-    def sort(self, elem: pathlib.Path):
+    def sort(self, elem: Path):
         if elem.is_file():
             c_date = return_time_file(elem, MODIFICATION_TIME)
             self.max_time = max([self.max_time, c_date])
@@ -570,7 +581,7 @@ class FStat:
             return -1
 
     @staticmethod
-    def reduce(elem: pathlib.Path, files, folders):
+    def reduce(elem: Path, files, folders):
         a = {True: (1, 0), False: (0, 1)}[elem.is_file()]
         return map(sum, zip(a, (files, folders)))
 
@@ -581,7 +592,7 @@ class FStat:
         no_max = not delta("!", obj, self.max_time)
         return {"-": exclude, "+": plus, "!": no_max, "@": fast_folder}
 
-    def get_info(self, files: pathlib.Path) -> Analyze:
+    def get_info(self, files: Path) -> Analyze:
         obj = Analyze(files)
         obj.equals = dict(self._match_return(obj.folders.name))
         obj.lock = any([x[1] for x in obj.equals.values()])
@@ -615,23 +626,20 @@ class FStat:
 def recursive_dir(dir_name):
     count = Counter()
     with FStat(dir_name) as rules:
-        elem: Analyze
         for elem in rules.iterdir:
             count += recursive_dir(elem)
         count += rules.count
-
     return count
 
 
 if __name__ == '__main__':
+    main_time = datetime.datetime.fromtimestamp(datetime.datetime.now().timestamp())
+    script_time = datetime.datetime.fromtimestamp(CURRENT_DATE)
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
-    arguments: argparse.Namespace
     arguments = alternative_parsers()
-    print(arguments, sep='\n')
     log()
-    write_log(f"Current platform: {sys.platform}")
-    tm = datetime.datetime.fromtimestamp(CURRENT_DATE)
-    write_log(f"{' Начато в: ' + tm.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
+    write_log(f"Current platform: {platform}")
+    write_log(f"{' Начато в: ' + main_time.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
     write_log(work := f'Запуск осуществлен с аргументом {arguments.command!r}. '
                       f'Файлы {"обрабатываются" if arguments.work else "не обрабатываются"}!')
     total_count = Counter()
@@ -647,10 +655,15 @@ if __name__ == '__main__':
         else:
             write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена")
 
-    write_log(f"{'#'*100}\n{' Всего: ':-^100}\n{total_count}")
+    write_log(f"{'#' * 100}\n{' Всего: ':-^100}\n{total_count}")
     tm_stop = datetime.datetime.now()
     write_log(f"{' Закончено в: ' + tm_stop.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
     tz = datetime.timezone(datetime.timedelta(hours=0))
-    write_log(datetime.datetime.fromtimestamp((tm_stop - tm).total_seconds(),
-                                              tz=tz).strftime("%H: час., %M: мин., %S: сек., %f: микросек."))
-    write_log(work)
+    sh = "%H: час., %M: мин., %S: сек., %f: мкс."
+    write_log(f"{'Время прогона':<25}:  "
+              f"{datetime.datetime.fromtimestamp((tm_stop - main_time).total_seconds(), tz=tz).strftime(sh)}")
+
+    write_log(f"{'Время выполнения скрипта':<25}:  "
+              f"{datetime.datetime.fromtimestamp((tm_stop - script_time).total_seconds(), tz=tz).strftime(sh)}")
+
+    write_log([work, f"Командная строка: {Path(__file__).absolute().as_posix()} {' '.join(argv[1:])}"])
