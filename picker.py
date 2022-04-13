@@ -39,6 +39,7 @@
 #     файлами или установленная программа.
 #     Имеет приоритет над <!>
 # -----------------------------------------------------------------------------------
+import subprocess
 from sys import platform, exit, argv
 import re
 import datetime
@@ -232,6 +233,8 @@ def alternative_parsers():
 
     logged.add_argument("-overall", action="store_true",
                         help="Вывести только общий результат. По умолчанию: <%(default)s>")
+    logged.add_argument("-bot", action="store_true", help="Отправка результата в телеграмм-канал. "
+                                                          "По умолчанию: <%(default)s>")
 
     arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0')
 
@@ -281,16 +284,20 @@ def log():
             arguments.name.replace(fullname)
 
 
-def write_log(text, err_log=False, overall=False):
+def get_message(text):
+    a = re.sub(r"([-+*=#]+)", '', text).strip()
+    return [a]
+
+
+def write_log(text, err_log=False, overall=False, bot=False):
     if len(text) == 0:
         return
-    if err_log:
-        name_log = arguments.error_log
-    else:
-        name_log = getattr(arguments, 'name', None)
+    name_log = {True: arguments.error_log, False: getattr(arguments, 'name', None)}[err_log]
+    lines = type(text) == list
+    if bot:
+        collector.extend(get_message(text))
 
     #  Выводим текст в консоль
-    lines = type(text) == list
     output = arguments.console and overall == arguments.overall
     if arguments.console and output:
         if lines:
@@ -644,13 +651,15 @@ def recursive_dir(dir_name):
 
 
 if __name__ == '__main__':
+    collector = []
     main_time = datetime.datetime.fromtimestamp(datetime.datetime.now().timestamp())
     script_time = datetime.datetime.fromtimestamp(CURRENT_DATE)
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
     arguments = alternative_parsers()
     log()
     write_log(f"Current platform: {platform}", overall=arguments.overall)
-    write_log(f"{' Начато в: ' + main_time.strftime('%d-%m-%Y %H:%M') + ' ':+^{width_text}}", overall=arguments.overall)
+    write_log(f"{' Начато в: ' + main_time.strftime('%d/%m/%Y %H:%M') + ' ':+^{width_text}}", overall=arguments.overall,
+              bot=True)
     work = f'Запуск осуществлен с параметром {arguments.command!r}. ' \
            f'Файлы {"обрабатываются" if arguments.work else "не обрабатываются"}! ' \
            f'{"Выводим только результат!" if arguments.overall else ""}'
@@ -668,19 +677,23 @@ if __name__ == '__main__':
         else:
             write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена")
 
-    write_log(f"{'#' * 100}\n{' Всего: ':-^{width_text}}\n{total_count}", overall=True)
+    write_log(f"{'#' * 100}\n{' Всего: ':-^{width_text}}\n{total_count}", overall=True, bot=True)
     tm_stop = datetime.datetime.now()
-    write_log(f"{' Закончено в: ' + tm_stop.strftime('%d-%m-%Y %H:%M') + ' ':+^{width_text}}",
-              overall=arguments.overall)
+    write_log(f"{' Закончено в: ' + tm_stop.strftime('%d/%m/%Y %H:%M') + ' ':+^{width_text}}",
+              overall=arguments.overall, bot=True)
     tz = datetime.timezone(datetime.timedelta(hours=0))
     sh = "%H: час., %M: мин., %S: сек., %f: мкс."
     write_log(f"{'Время прогона':<25}:  "
               f"{datetime.datetime.fromtimestamp((tm_stop - main_time).total_seconds(), tz=tz).strftime(sh)}",
-              overall=arguments.overall)
+              overall=arguments.overall, bot=True)
 
     write_log(f"{'Время выполнения скрипта':<25}:  "
               f"{datetime.datetime.fromtimestamp((tm_stop - script_time).total_seconds(), tz=tz).strftime(sh)}",
-              overall=arguments.overall)
+              overall=arguments.overall, bot=True)
 
     write_log([work, f"Командная строка: {Path(__file__).absolute().as_posix()} {' '.join(argv[1:])}"],
               overall=arguments.overall)
+
+    if arguments.bot:
+        path = Path(argv[0]).parent.joinpath('picker_bot.sh')
+        subprocess.call([path, '\n'.join(collector)])
