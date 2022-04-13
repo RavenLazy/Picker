@@ -73,6 +73,8 @@ old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 counter_text = ("Объектов", "Количество папок", "Количество файлов", "Пропущено файлов", "Пропущено папок",
                 "Перемещено файлов", "Удалено файлов", "Удалено папок")
 
+width_text = 200
+
 
 def add_default_rule():
     if not arguments.trash.exists():
@@ -226,11 +228,15 @@ def alternative_parsers():
                         help="Включает запись лога. Дополнительные параметры [-name log.log] [-size 10000] [-append] "
                              "По умолчанию: <%(default)s>")
 
-    arg.add_argument("-console", action="store_true", help="Выводить в консоль. По умолчанию <%(default)s>")
+    logged.add_argument("-console", action="store_true", help="Выводить в консоль. По умолчанию <%(default)s>")
+
+    logged.add_argument("-overall", action="store_true",
+                        help="Вывести только общий результат. По умолчанию: <%(default)s>")
 
     arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0')
 
     # Выставляем параметры для лог файла, если указан аргумент -log
+
     logging: bool
     if logging := arg.parse_known_args()[0].log:
         logged.add_argument("-name", nargs=1, action=ActionTrash, help=f"Имя лог-файла <{NAME_LOG}>")
@@ -275,7 +281,7 @@ def log():
             arguments.name.replace(fullname)
 
 
-def write_log(text, err_log=False):
+def write_log(text, err_log=False, overall=False):
     if len(text) == 0:
         return
     if err_log:
@@ -283,16 +289,17 @@ def write_log(text, err_log=False):
     else:
         name_log = getattr(arguments, 'name', None)
 
-    lines = type(text) == list
     #  Выводим текст в консоль
-    if arguments.console:
+    lines = type(text) == list
+    output = arguments.console and overall == arguments.overall
+    if arguments.console and output:
         if lines:
             print(*text, sep="\n")
         else:
             print(text)
 
     #  Выводим текст в файл
-    if arguments.log or err_log:
+    if (arguments.log and output) or err_log:
         with open(name_log, "a") as f:
             if lines:
                 f.writelines([f"{line}\n" for line in text])
@@ -514,7 +521,10 @@ class FStat:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_val:
             s = traceback.extract_tb(exc_tb)
-            write_log([f"{STR_NOW_DATE} ::{self.parent_rule.folders}\n{traceback.format_list(s)[0]}{exc_val}", "^" * 100], err_log=True)
+            write_log([f"{STR_NOW_DATE} ::"
+                       f"{self.parent_rule.folders}\n"
+                       f"{traceback.format_list(s)[0]}{exc_val}", "^" * sum([len(x) for x in exc_val.args])],
+                      err_log=True)
             return False
 
     @staticmethod
@@ -620,7 +630,8 @@ class FStat:
             self.count.exclude_files, self.count.exclude_folders = self.reduce(
                 rules.folders, self.count.exclude_files, self.count.exclude_folders)
 
-        write_log([f"{' Поиск в: ' + f'{self.parent_rule.folders.as_posix()!r}' + ' ':-^100}", *_log, self.count])
+        write_log([f"{' Поиск в: ' + f'{self.parent_rule.folders.as_posix()!r}' + ' ':-^{width_text}}", *_log,
+                   self.count])
 
 
 def recursive_dir(dir_name):
@@ -638,10 +649,12 @@ if __name__ == '__main__':
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
     arguments = alternative_parsers()
     log()
-    write_log(f"Current platform: {platform}")
-    write_log(f"{' Начато в: ' + main_time.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
-    write_log(work := f'Запуск осуществлен с аргументом {arguments.command!r}. '
-                      f'Файлы {"обрабатываются" if arguments.work else "не обрабатываются"}!')
+    write_log(f"Current platform: {platform}", overall=arguments.overall)
+    write_log(f"{' Начато в: ' + main_time.strftime('%d-%m-%Y %H:%M') + ' ':+^{width_text}}", overall=arguments.overall)
+    work = f'Запуск осуществлен с параметром {arguments.command!r}. ' \
+           f'Файлы {"обрабатываются" if arguments.work else "не обрабатываются"}! ' \
+           f'{"Выводим только результат!" if arguments.overall else ""}'
+    write_log(work, overall=arguments.overall)
     total_count = Counter()
     total_parts = Counter()
     for file in arguments.Search:
@@ -650,20 +663,24 @@ if __name__ == '__main__':
             add_default_rule()
         if file.exists():
             total_parts = recursive_dir(file)
-            write_log(f"{' Итог: [' + f'{arguments.folder.as_posix()!r}' + '] ':*^100}\n{total_parts}")
+            write_log(f"{' Итог: [' + f'{arguments.folder.as_posix()!r}' + '] ':*^{width_text}}\n{total_parts}")
             total_count += total_parts
         else:
             write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена")
 
-    write_log(f"{'#' * 100}\n{' Всего: ':-^100}\n{total_count}")
+    write_log(f"{'#' * 100}\n{' Всего: ':-^{width_text}}\n{total_count}", overall=True)
     tm_stop = datetime.datetime.now()
-    write_log(f"{' Закончено в: ' + tm_stop.strftime('%d-%m-%Y %H:%M') + ' ':+^100}")
+    write_log(f"{' Закончено в: ' + tm_stop.strftime('%d-%m-%Y %H:%M') + ' ':+^{width_text}}",
+              overall=arguments.overall)
     tz = datetime.timezone(datetime.timedelta(hours=0))
     sh = "%H: час., %M: мин., %S: сек., %f: мкс."
     write_log(f"{'Время прогона':<25}:  "
-              f"{datetime.datetime.fromtimestamp((tm_stop - main_time).total_seconds(), tz=tz).strftime(sh)}")
+              f"{datetime.datetime.fromtimestamp((tm_stop - main_time).total_seconds(), tz=tz).strftime(sh)}",
+              overall=arguments.overall)
 
     write_log(f"{'Время выполнения скрипта':<25}:  "
-              f"{datetime.datetime.fromtimestamp((tm_stop - script_time).total_seconds(), tz=tz).strftime(sh)}")
+              f"{datetime.datetime.fromtimestamp((tm_stop - script_time).total_seconds(), tz=tz).strftime(sh)}",
+              overall=arguments.overall)
 
-    write_log([work, f"Командная строка: {Path(__file__).absolute().as_posix()} {' '.join(argv[1:])}"])
+    write_log([work, f"Командная строка: {Path(__file__).absolute().as_posix()} {' '.join(argv[1:])}"],
+              overall=arguments.overall)
