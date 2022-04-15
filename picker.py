@@ -39,6 +39,7 @@
 #     файлами или установленная программа.
 #     Имеет приоритет над <!>
 # -----------------------------------------------------------------------------------
+import math
 import subprocess
 from sys import platform, exit, argv
 import re
@@ -71,10 +72,7 @@ list_includes_znak = ("@", "!", "+")
 
 old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 
-counter_text = ("Объектов", "Количество папок", "Количество файлов", "Пропущено файлов", "Пропущено папок",
-                "Перемещено файлов", "Удалено файлов", "Удалено папок")
-
-width_text = 200
+width_text = 125
 
 
 def add_default_rule():
@@ -139,6 +137,7 @@ def return_list_main(elem: argparse.Namespace):
 
 
 def for_size(item):
+    # Переводим буквенный код размера файла в числовой
     ident: str
     size: int
     coefficient = 1000
@@ -152,13 +151,6 @@ def create_path(namespace, values):
     for v in values:
         r = folder.joinpath(v)
         yield r
-
-
-def flatten(values):
-    s = []
-    for x in values:
-        s.extend(x)
-    return s
 
 
 def read_path(namespace, values):
@@ -180,11 +172,15 @@ class ActionFile(argparse.Action):
 class ActionSearch(ActionFile):
 
     def __call__(self, parser, namespace, values: list, option_string=None):
-        values = create_path(namespace, [values])
+        values = list(create_path(namespace, [values]))
         if atr := getattr(namespace, 'Search'):
             if type(atr) == list:
-                _, values = atr.extend(values), atr
-        setattr(namespace, self.dest, list(values))
+                # Todo: Как-то изменить???
+                if values[0] not in atr:
+                    _, values = atr.extend(values), atr
+                else:
+                    values = atr
+        setattr(namespace, self.dest, values)
 
 
 class ActionTrash(ActionFile):
@@ -236,7 +232,11 @@ def alternative_parsers():
     logged.add_argument("-bot", action="store_true", help="Отправка результата в телеграмм-канал. "
                                                           "По умолчанию: <%(default)s>")
 
-    arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0')
+    # Todo: Обработать ключ -End
+    logged.add_argument("-End", action="store_true", help="Сбор лога и вывод только после окончания работы. "
+                                                          "По умолчанию: <%(default)s>")
+
+    arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0b')
 
     # Выставляем параметры для лог файла, если указан аргумент -log
 
@@ -255,6 +255,7 @@ def alternative_parsers():
     arg.set_defaults(error_log=command_argument.folder.joinpath(ERROR_LOG))
 
     # Создаем список папок для поиска. Читаем файл .path или что задано в pathname
+
     if command_argument.Search is None:
         arg.set_defaults(Search=list(
             *re_change(arg, command_argument, ['-p', '.path']).Search
@@ -264,8 +265,9 @@ def alternative_parsers():
         arg.set_defaults(trash=re_change(arg, command_argument, ['-t', NAME_MOVE_DIR]).trash)
 
     arg.set_defaults(trash_day=(arg.get_default('trash') or command_argument.trash).joinpath(STR_NOW_DATE))
-    arg.set_defaults(Search=(arg.get_default("Search") or command_argument.Search) + [arg.get_default("trash")
-                                                                                      or command_argument.trash])
+    # Todo: Изменить логику, чтобы не делать проверку в классе?
+    s = (arg.get_default('Search') or command_argument.Search) + [(arg.get_default('trash') or command_argument.trash)]
+    arg.set_defaults(Search=s)
     arg.set_defaults(work=command_argument.command == 'execute')
 
     return arg.parse_args()
@@ -289,24 +291,28 @@ def get_message(text):
     return [a]
 
 
+def get_output(out, overall):
+    return out and overall == arguments.overall
+
+
 def write_log(text, err_log=False, overall=False, bot=False):
+    # Todo: Может создать класс???
     if len(text) == 0:
         return
     name_log = {True: arguments.error_log, False: getattr(arguments, 'name', None)}[err_log]
     lines = type(text) == list
-    if bot:
+    if bot and platform != "win32":
         collector.extend(get_message(text))
 
     #  Выводим текст в консоль
-    output = arguments.console and overall == arguments.overall
-    if arguments.console and output:
+    if arguments.console and get_output(arguments.console, overall):
         if lines:
             print(*text, sep="\n")
         else:
             print(text)
 
     #  Выводим текст в файл
-    if (arguments.log and output) or err_log:
+    if (arguments.log and get_output(arguments.log, overall)) or err_log:
         with open(name_log, "a") as f:
             if lines:
                 f.writelines([f"{line}\n" for line in text])
@@ -319,20 +325,61 @@ def return_time_file(name: Path, type_time):
             CREATION_TIME: name.stat().st_ctime}[type_time]
 
 
-def revert_rules(elem: dict):
-    def _mn(x):
-        for d, c in zip(x, ["Y:U", "M:U", "D:U", "H:U"]):
-            if d == 0:
-                continue
-            yield d, c
+intervals = (
+    ('Y', 31536000),
+    ('M', 2592000),  # 60 * 60 * 24 * 30
+    ('D', 86400),    # 60 * 60 * 24
+    ('H', 3600),    # 60 * 60
+    ('minutes', 60),
+    ('seconds', 1),
+    )
 
+srt = (1,  # 12 месяцев в году
+       12,  # 30 days into month
+       30,  # 24 hours into days
+       24,  # 60 minutes
+       60,  # 60 seconds
+       0)
+
+
+def find_date(znak, seconds):
+    def add_day_to_year(aa, bb):
+        if aa != num:
+            cc = bb * srt[num]
+            if aa == 0 and num == 2:
+                cc += 5 * bb // 12
+            return cc
+        return bb
+    result = []
+    nam = ''
+    for num, c in enumerate(intervals):
+        name, count = c
+        value = seconds // count
+        if value:
+            seconds -= value * count
+            result.append((num, value))
+            result = [(a, add_day_to_year(a, b)) for a, b in result]
+            nam = name
+    if result:
+        return f"{znak}*:{sum(map(lambda x: x[1], result))}{nam}:U"
+    return f"{znak}*:0H:U"
+
+
+def revert_rules(elem: dict):
     # Переводим секунды в корректное время
     if len(elem) == 0:
         return {}
     for znak, (seconds, lock, deep) in elem.items():
-        _n, _d = min(_mn([seconds // 31536000, seconds // 2592000, seconds // 86400, seconds // 3600]),
-                     default=(0, "H:U"))
-        yield f"{znak}*:{_n}{_d}"
+        result = find_date(znak, seconds)
+        # for num, c in enumerate(intervals):
+        #     name, count = c
+        #     value = seconds // count
+        #     if value:
+        #         seconds -= value * count
+        #         result.append((num, value))
+        #         result = [(a, add_day_to_year(a, b)) for a, b in result]
+        #         nam = name
+        yield result
 
 
 def replace_template(pat, item):
@@ -371,6 +418,21 @@ def get_count(elem: Path):
     return ret
 
 
+def human_read_format(size):
+    suff = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ", "ЭБ", "ЗБ", "ЙБ"]
+    if size == 0:
+        return f"0 {suff[0]}"
+    pwr = math.floor(math.log(size, 1024))
+    if size > 1024 ** (len(suff) - 1):
+        return "не знаю как назвать такое число :)"
+    return f"{size / 1024 ** pwr:.2f} {suff[pwr]}"
+
+
+counter_text = ("Объектов", "Количество папок", "Количество файлов", "Пропущено файлов", "Пропущено папок",
+                "Удалено папок", "Перемещено файлов", "Размер перемещенных файлов", "Удалено файлов",
+                "Размер освобожденного места")
+
+
 class Counter:
     """
     Счетчик\n
@@ -385,8 +447,8 @@ class Counter:
     - delete_folders: Удалено папок\n
     """
 
-    __slots__ = ("total", "folder", "files", "exclude_files", "exclude_folders", "move_object",
-                 "delete_files", "delete_folders")
+    __slots__ = ("total", "folder", "files", "exclude_files", "exclude_folders", "delete_folders", "move_files",
+                 "move_files_size", "delete_files", "delete_files_size")
 
     def __init__(self):
         self.total = 0  # Всего объектов в папке
@@ -394,9 +456,11 @@ class Counter:
         self.files = 0  # Файлы дошедшие до проверки include
         self.exclude_files = 0  # Пропущено файлов
         self.exclude_folders = 0  # Пропущено папок
-        self.move_object = 0  # Перемещенных объектов
-        self.delete_files = 0  # Удалено файлов
         self.delete_folders = 0  # Удалено папок
+        self.move_files = 0  # Перемещенных объектов
+        self.move_files_size = 0  # Объем перемещенных файлов
+        self.delete_files = 0  # Удалено файлов
+        self.delete_files_size = 0  # Объем освобожденного места
 
     def __iadd__(self, other):
         if type(self) == type(other):
@@ -407,10 +471,34 @@ class Counter:
             raise TypeError(f"{type(self)} != {type(other)}")
         return self
 
+    @staticmethod
+    def get_list(message: dict, lst: list | tuple, form="key:  value"):
+        form = form.split("-->")
+        m = [message[x] for x in lst]
+        start, stop, step = 0, len(form), len(form)
+        for i in range(len(m) // step):
+            st = ''
+            for en, k in enumerate(zip(form, m[start:stop])):
+                pattern, (name, value) = k
+                st += pattern.replace("key", f"{name:<{18 + en * 10}}")
+                if en > 0:
+                    st = st.replace("value", human_read_format(value))
+                else:
+                    st = st.replace("value", f"{value}")
+            yield st
+            start, stop = start + step, stop + step
+
     def __str__(self):
-        return '\n'.join(
-            [f"{key.ljust(18):s}:  {value:d}" for key, value in
-             zip(counter_text, [self.__getattribute__(x) for x in self.__slots__])])
+        message = {}
+        m = 0
+        for e, i in enumerate(self.__slots__):
+            message.update({i: (counter_text[e], self.__getattribute__(i))})
+            if (ll := len(counter_text[e])) > m:
+                m = ll
+
+        s = list(self.get_list(message, self.__slots__[:5], form="key:  value"))
+        s += list(self.get_list(message, self.__slots__[6:], form="key:  value --> key:  value"))
+        return '\n'.join(s)
 
     def __len__(self):
         return len(self.__slots__)
@@ -467,7 +555,7 @@ class Deleter:
 
     @classmethod
     def work_folder(cls, elem: Analyze, count: Counter):
-        ss = elem.count.files - (elem.count.move_object + elem.count.delete_files) + \
+        ss = elem.count.files - (elem.count.move_files + elem.count.delete_files) + \
              elem.count.folder - elem.count.delete_folders
         if (is_fast := elem.rule["@"]) or (ss == 0 and elem.lock is False):
             fast_deleter(elem)
@@ -485,9 +573,11 @@ class Deleter:
             if arguments.is_old:
                 delete(elem)
                 count.delete_files += 1
+                count.delete_files_size += elem.folders.stat().st_size
                 return f"Удаляем файл: {elem.folders.as_posix()!r}", count
             replace(elem, old)
-            count.move_object += 1
+            count.move_files += 1
+            count.move_files_size += elem.folders.stat().st_size
             if is_max:
                 txt = f"Групповое перемещение: {elem.folders.as_posix()!r}"
             else:
@@ -513,7 +603,7 @@ def replace(elem: Analyze, old_dir: Path):
     if arguments.work:
         if old_dir.exists() is False:
             old_dir.mkdir(parents=True)
-        elem.folders.replace(old_dir)
+        elem.folders.replace(old_dir.joinpath(elem.folders.parts[-1]))
 
 
 class FStat:
@@ -672,12 +762,14 @@ if __name__ == '__main__':
             add_default_rule()
         if file.exists():
             total_parts = recursive_dir(file)
-            write_log(f"{' Итог: [' + f'{arguments.folder.as_posix()!r}' + '] ':*^{width_text}}\n{total_parts}")
+            write_log(f"{' Итог: [' + f'{file.as_posix()!r}' + '] ':*^{width_text}}\n{total_parts}",
+                      overall=arguments.overall, bot=True)
             total_count += total_parts
         else:
             write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена")
 
-    write_log(f"{'#' * 100}\n{' Всего: ':-^{width_text}}\n{total_count}", overall=True, bot=True)
+    total_count.total = 10000000
+    write_log(f"{'#' * width_text}\n{' Всего: ':-^{width_text}}\n{total_count}", overall=arguments.overall, bot=True)
     tm_stop = datetime.datetime.now()
     write_log(f"{' Закончено в: ' + tm_stop.strftime('%d/%m/%Y %H:%M') + ' ':+^{width_text}}",
               overall=arguments.overall, bot=True)
@@ -694,6 +786,6 @@ if __name__ == '__main__':
     write_log([work, f"Командная строка: {Path(__file__).absolute().as_posix()} {' '.join(argv[1:])}"],
               overall=arguments.overall)
 
-    if arguments.bot:
+    if collector and arguments.bot:
         path = Path(argv[0]).parent.joinpath('picker_bot.sh')
         subprocess.call([path, '\n'.join(collector)])
