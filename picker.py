@@ -414,23 +414,6 @@ class Counter:
             raise TypeError(f"{type(self)} != {type(other)}")
         return self
 
-    @staticmethod
-    def get_list(message: dict, lst: list | tuple, form="key:  value"):
-        form = form.split("-->")
-        m = [message[x] for x in lst]
-        start, stop, step = 0, len(form), len(form)
-        for i in range(len(m) // step):
-            st = ''
-            for en, k in enumerate(zip(form, m[start:stop])):
-                pattern, (name, value) = k
-                st += pattern.replace("key", f"{name:<{18 + en * 10}}")
-                if en > 0:
-                    st = st.replace("value", human_read_format(value))
-                else:
-                    st = st.replace("value", f"{value}")
-            yield st
-            start, stop = start + step, stop + step
-
     def __str__(self):
         message = {}
         m = 0
@@ -439,12 +422,29 @@ class Counter:
             if (ll := len(counter_text[e])) > m:
                 m = ll
 
-        s = list(self.get_list(message, self.__slots__[:5], form="key:  value"))
-        s += list(self.get_list(message, self.__slots__[6:], form="key:  value --> key:  value"))
+        s = list(get_list(message, self.__slots__[:5], form="key:  value"))
+        s += list(get_list(message, self.__slots__[6:], form="key:  value --> key:  value"))
         return '\n'.join(s)
 
     def __len__(self):
         return len(self.__slots__)
+
+
+def get_list(message: dict, lst: list | tuple, form="key:  value"):
+    form = form.split("-->")
+    m = [message[x] for x in lst]
+    start, stop, step = 0, len(form), len(form)
+    for i in range(len(m) // step):
+        st = ''
+        for en, k in enumerate(zip(form, m[start:stop])):
+            pattern, (name, value) = k
+            st += pattern.replace("key", f"{name:<{18 + en * 10}}")
+            if en > 0:
+                st = st.replace("value", human_read_format(value))
+            else:
+                st = st.replace("value", f"{value}")
+        yield st
+        start, stop = start + step, stop + step
 
 
 def change_parent_equal(item: dict) -> dict:
@@ -573,31 +573,6 @@ class FStat:
                       err_log=True)
             return False
 
-    @staticmethod
-    def _add_znak(item, znak):
-        return list(map(lambda x: znak + x if x[0] not in list_includes_znak else x, item))
-
-    @staticmethod
-    def get_deep(rule_text, dp):
-        tmp = []
-        rule_text += [elem for elem in dp]
-        if len(rule_text) == 0:
-            yield '', ''
-        for name, args in decompress(rule_text, arguments.folder, True):
-            date, lock, deep = args
-
-            if name in tmp:
-                continue
-            tmp.append(name)
-            lock = 'L' if len(lock) == 0 else lock
-            if deep - 1 != -1:
-                if deep > 0:
-                    deep -= 1
-                rl = ":".join([name, date, lock, str(deep)])
-                yield rl, rl
-            else:
-                yield ":".join([name, date, lock, '0']), ''
-
     def add_parent_equal(self):
         for key, value in self.parent_rule.equals.items():
             if key in self._lst_key:
@@ -610,10 +585,10 @@ class FStat:
         # На выходе получаем список кортежей с дельта-временем, определением можно ли удалить папку и именем этой папки
         rules = self.parent_rule.folders.joinpath(arguments.rule)
         rule_text = (rules.read_text(encoding="utf-8").splitlines() if rules.exists() else [])
-        rule_text, deep = zip(*self.get_deep(rule_text, self.parent_rule.deep))
+        rule_text, deep = zip(*get_deep(rule_text, self.parent_rule.deep))
         self.parent_rule.deep = list(filter(len, deep))
         rule_text = list(filter(len, rule_text))
-        rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-")
+        rule_text += _add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-")
 
         self._lst_key, self._lst_value = zip(*return_list(rule_text,
                                                           arguments.folder.joinpath(self.parent_rule.folders)))
@@ -621,10 +596,6 @@ class FStat:
         self._rules_compile_new = re.compile("(" + "$)|(".join(
             replace_template({"+": "[+]", "*": r".*", "!": "[!]", "@": "[@]", "?": "."}, self._lst_key)) + "$)")
         return self
-
-    @staticmethod
-    def _get_item(elem, last, index=0):
-        return elem[last.lastindex - 1][index]
 
     def _match_return(self, elem: str):
         znak = ["-", "@", "+", "!"]
@@ -643,11 +614,6 @@ class FStat:
             return CURRENT_DATE - c_date
         else:
             return -1
-
-    @staticmethod
-    def reduce(elem: Path, files, folders):
-        a = {True: (1, 0), False: (0, 1)}[elem.is_file()]
-        return map(sum, zip(a, (files, folders)))
 
     def get_bool_match(self, obj: Analyze) -> dict:
         exclude = delta("-", obj)
@@ -681,11 +647,45 @@ class FStat:
                     _log.append(txt)
                 continue
 
-            self.count.exclude_files, self.count.exclude_folders = self.reduce(
+            self.count.exclude_files, self.count.exclude_folders = reduce(
                 rules.folders, self.count.exclude_files, self.count.exclude_folders)
 
         write_log([f"{' Поиск в: ' + f'{self.parent_rule.folders.as_posix()!r}' + ' ':-^{width_text}}", *_log,
                    self.count])
+
+
+def _add_znak(item, znak):
+    return list(map(lambda x: znak + x if x[0] not in list_includes_znak else x, item))
+
+
+def get_deep(rule_text, dp):
+    tmp = []
+    rule_text += [elem for elem in dp]
+    if len(rule_text) == 0:
+        yield '', ''
+    for name, args in decompress(rule_text, arguments.folder, True):
+        date, lock, deep = args
+
+        if name in tmp:
+            continue
+        tmp.append(name)
+        lock = 'L' if len(lock) == 0 else lock
+        if deep - 1 != -1:
+            if deep > 0:
+                deep -= 1
+            rl = ":".join([name, date, lock, str(deep)])
+            yield rl, rl
+        else:
+            yield ":".join([name, date, lock, '0']), ''
+
+
+def reduce(elem: Path, files, folders):
+    a = {True: (1, 0), False: (0, 1)}[elem.is_file()]
+    return map(sum, zip(a, (files, folders)))
+
+
+def _get_item(elem, last, index=0):
+    return elem[last.lastindex - 1][index]
 
 
 def recursive_dir(dir_name):
