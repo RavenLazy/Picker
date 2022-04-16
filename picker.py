@@ -325,63 +325,6 @@ def return_time_file(name: Path, type_time):
             CREATION_TIME: name.stat().st_ctime}[type_time]
 
 
-intervals = (
-    ('Y', 31536000),
-    ('M', 2592000),  # 60 * 60 * 24 * 30
-    ('D', 86400),    # 60 * 60 * 24
-    ('H', 3600),    # 60 * 60
-    ('minutes', 60),
-    ('seconds', 1),
-    )
-
-srt = (1,  # 12 месяцев в году
-       12,  # 30 days into month
-       30,  # 24 hours into days
-       24,  # 60 minutes
-       60,  # 60 seconds
-       0)
-
-
-def find_date(znak, seconds):
-    def add_day_to_year(aa, bb):
-        if aa != num:
-            cc = bb * srt[num]
-            if aa == 0 and num == 2:
-                cc += 5 * bb // 12
-            return cc
-        return bb
-    result = []
-    nam = ''
-    for num, c in enumerate(intervals):
-        name, count = c
-        value = seconds // count
-        if value:
-            seconds -= value * count
-            result.append((num, value))
-            result = [(a, add_day_to_year(a, b)) for a, b in result]
-            nam = name
-    if result:
-        return f"{znak}*:{sum(map(lambda x: x[1], result))}{nam}:U"
-    return f"{znak}*:0H:U"
-
-
-def revert_rules(elem: dict):
-    # Переводим секунды в корректное время
-    if len(elem) == 0:
-        return {}
-    for znak, (seconds, lock, deep) in elem.items():
-        result = find_date(znak, seconds)
-        # for num, c in enumerate(intervals):
-        #     name, count = c
-        #     value = seconds // count
-        #     if value:
-        #         seconds -= value * count
-        #         result.append((num, value))
-        #         result = [(a, add_day_to_year(a, b)) for a, b in result]
-        #         nam = name
-        yield result
-
-
 def replace_template(pat, item):
     # Символы в item меняем на подстановочные знаки в pat
     for elem in item:
@@ -504,8 +447,13 @@ class Counter:
         return len(self.__slots__)
 
 
+def change_parent_equal(item: dict) -> dict:
+    ret = {f"{key}*": (value[0], value[1] if value[2] > 0 else False, value[2]) for key, value in item.items()}
+    return ret
+
+
 class Analyze:
-    __slots__ = ("folders", "deep", "equals", "lock", "count", "rule")
+    __slots__ = ("folders", "deep", "equals", "lock", "count", "rule", "old")
 
     def __init__(self, files):
         """
@@ -515,10 +463,11 @@ class Analyze:
         if isinstance(files, Analyze):
             self.folders = files.folders
             self.deep = files.deep
-            self.equals = revert_rules(files.equals)
+            # self.equals = revert_rules(files.equals)
             self.lock = files.lock
             self.count = files.count
             self.rule = files.rule
+            self.equals = change_parent_equal(files.equals)
         else:
             self.folders = Path(files)
             self.deep = []
@@ -608,6 +557,7 @@ def replace(elem: Analyze, old_dir: Path):
 
 class FStat:
     """Обработка путей"""
+    _lst_key: tuple
 
     def __init__(self, rule):
 
@@ -649,6 +599,13 @@ class FStat:
             else:
                 yield ":".join([name, date, lock, '0']), ''
 
+    def add_parent_equal(self):
+        for key, value in self.parent_rule.old.items():
+            if key in self._lst_key:
+                continue
+            self._lst_value += value,
+            self._lst_key += key,
+
     def __enter__(self):
         # Читаем файл с правилами, если найден, добавляем правила по умолчанию.
         # На выходе получаем список кортежей с дельта-временем, определением можно ли удалить папку и именем этой папки
@@ -657,10 +614,11 @@ class FStat:
         rule_text, deep = zip(*self.get_deep(rule_text, self.parent_rule.deep))
         self.parent_rule.deep = list(filter(len, deep))
         rule_text = list(filter(len, rule_text))
-        rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-") + self._add_znak(
-            self.parent_rule.equals, "+")
+        rule_text += self._add_znak(map(lambda x: f"{x}:0N", MAIN_EXCLUDE), "-")
+
         self._lst_key, self._lst_value = zip(*return_list(rule_text,
                                                           arguments.folder.joinpath(self.parent_rule.folders)))
+        self.add_parent_equal()
         self._rules_compile_new = re.compile("(" + "$)|(".join(
             replace_template({"+": "[+]", "*": r".*", "!": "[!]", "@": "[@]", "?": "."}, self._lst_key)) + "$)")
         return self
