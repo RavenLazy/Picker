@@ -173,14 +173,9 @@ class ActionSearch(ActionFile):
 
     def __call__(self, parser, namespace, values: list, option_string=None):
         values = list(create_path(namespace, [values]))
-        if atr := getattr(namespace, 'Search'):
-            if type(atr) == list:
-                # Todo: Как-то изменить???
-                if values[0] not in atr:
-                    _, values = atr.extend(values), atr
-                else:
-                    values = atr
-        setattr(namespace, self.dest, values)
+        if (atr := (getattr(namespace, 'Search') or values)) and values[0] not in atr:
+            atr += values
+        setattr(namespace, self.dest, atr)
 
 
 class ActionTrash(ActionFile):
@@ -232,23 +227,17 @@ def alternative_parsers():
     logged.add_argument("-bot", action="store_true", help="Отправка результата в телеграмм-канал. "
                                                           "По умолчанию: <%(default)s>")
 
-    # Todo: Обработать ключ -End
-    logged.add_argument("-End", action="store_true", help="Сбор лога и вывод только после окончания работы. "
-                                                          "По умолчанию: <%(default)s>")
-
     arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0b')
 
     # Выставляем параметры для лог файла, если указан аргумент -log
 
-    logging: bool
-    if logging := arg.parse_known_args()[0].log:
-        logged.add_argument("-name", nargs=1, action=ActionTrash, help=f"Имя лог-файла <{NAME_LOG}>")
-        logged.add_argument("-size", default=10000, type=for_size, help="Размер лога <%(default)s>")
-        logged.add_argument("-append", action="store_true", help="Продолжать дописывать <%(default)s>")
+    logged.add_argument("-name", nargs=1, action=ActionTrash, help=f"Имя лог-файла <{NAME_LOG}>")
+    logged.add_argument("-size", default=10000, type=for_size, help="Размер лога <%(default)s>")
+    logged.add_argument("-append", action="store_true", help="Продолжать дописывать <%(default)s>")
 
     command_argument = arg.parse_args()
     # Имя лог файла
-    if logging and command_argument.name is None:
+    if command_argument.log and command_argument.name is None:
         arg.set_defaults(name=re_change(arg, command_argument, ['-n', NAME_LOG]).name)
 
     # Добавляем имя файла с ошибками
@@ -265,7 +254,6 @@ def alternative_parsers():
         arg.set_defaults(trash=re_change(arg, command_argument, ['-t', NAME_MOVE_DIR]).trash)
 
     arg.set_defaults(trash_day=(arg.get_default('trash') or command_argument.trash).joinpath(STR_NOW_DATE))
-    # Todo: Изменить логику, чтобы не делать проверку в классе?
     s = (arg.get_default('Search') or command_argument.Search) + [(arg.get_default('trash') or command_argument.trash)]
     arg.set_defaults(Search=s)
     arg.set_defaults(work=command_argument.command == 'execute')
@@ -296,7 +284,6 @@ def get_output(out, overall):
 
 
 def write_log(text, err_log=False, overall=False, bot=False):
-    # Todo: Может создать класс???
     if len(text) == 0:
         return
     name_log = {True: arguments.error_log, False: getattr(arguments, 'name', None)}[err_log]
@@ -434,7 +421,7 @@ def get_list(message: dict, lst: list | tuple, form="key:  value"):
     form = form.split("-->")
     m = [message[x] for x in lst]
     start, stop, step = 0, len(form), len(form)
-    for i in range(len(m) // step):
+    for _ in range(len(m) // step):
         st = ''
         for en, k in enumerate(zip(form, m[start:stop])):
             pattern, (name, value) = k
