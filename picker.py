@@ -58,7 +58,7 @@ DAY_TO_PURGE = 14
 Default_rule_old_days = f"@*:1D:U\n-*:{DAY_TO_PURGE}D:U"
 
 NAME_RULE = ".rule"
-NAME_PATH = ".path"
+NAME_PATH = "Software/.path"
 ERROR_LOG = "error.log"
 NAME_LOG = "log.log"
 
@@ -207,6 +207,7 @@ def alternative_parsers():
     search_folder.add_argument("-Search", type=str, action=ActionSearch,
                                metavar="<Folder1> <Folder2> ... <FolderNNN>",
                                help=f"Папки поиска.")
+
     search_folder.add_argument("-pathname", type=str, default='.path', metavar=".path", action=ActionFile,
                                help=f"Имя файла с папками для поиска. По умолчанию: <%(default)s>")
 
@@ -224,6 +225,7 @@ def alternative_parsers():
 
     logged.add_argument("-overall", action="store_true",
                         help="Вывести только общий результат. По умолчанию: <%(default)s>")
+
     logged.add_argument("-bot", action="store_true", help="Отправка результата в телеграмм-канал. "
                                                           "По умолчанию: <%(default)s>")
 
