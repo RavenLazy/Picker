@@ -463,7 +463,6 @@ class Analyze:
         if isinstance(files, Analyze):
             self.folders = files.folders
             self.deep = files.deep
-            # self.equals = revert_rules(files.equals)
             self.lock = files.lock
             self.count = files.count
             self.rule = files.rule
