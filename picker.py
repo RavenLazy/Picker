@@ -453,7 +453,7 @@ def change_parent_equal(item: dict) -> dict:
 
 
 class Analyze:
-    __slots__ = ("folders", "deep", "equals", "lock", "count", "rule", "old")
+    __slots__ = ("folders", "deep", "equals", "lock", "count", "rule")
 
     def __init__(self, files):
         """
@@ -600,7 +600,7 @@ class FStat:
                 yield ":".join([name, date, lock, '0']), ''
 
     def add_parent_equal(self):
-        for key, value in self.parent_rule.old.items():
+        for key, value in self.parent_rule.equals.items():
             if key in self._lst_key:
                 continue
             self._lst_value += value,
