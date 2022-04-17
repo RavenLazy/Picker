@@ -277,8 +277,13 @@ def log():
 
 
 def get_message(text):
-    a = re.sub(r"([-+*=#]+)", '', text).strip()
-    return [a]
+    if type(text) != str:
+        for elem in text:
+            a = re.sub(r"([-+*=#]+)", '', elem).strip()
+            yield a
+    else:
+        a = re.sub(r"([-+*=#]+)", '', text).strip()
+        return [a]
 
 
 def get_output(out, overall):
@@ -290,8 +295,12 @@ def write_log(text, err_log=False, overall=False, bot=False):
         return
     name_log = {True: arguments.error_log, False: getattr(arguments, 'name', None)}[err_log]
     lines = type(text) == list
+
     if bot and platform != "win32":
         collector.extend(get_message(text))
+
+    if err_log:
+        send_message(get_message(text))
 
     #  Выводим текст в консоль
     if arguments.console and get_output(arguments.console, overall):
@@ -556,10 +565,10 @@ class FStat:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_val:
             s = traceback.extract_tb(exc_tb)
-            write_log([f"{STR_NOW_DATE} ::"
-                       f"{self.parent_rule.folders}\n"
-                       f"{traceback.format_list(s)[0]}{exc_val}", "^" * sum([len(x) for x in exc_val.args])],
-                      err_log=True)
+            mes = [f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} :: "
+                   f"{self.parent_rule.folders}\n"
+                   f"{traceback.format_list(s)[0]}{exc_val}", "^" * sum([len(x) for x in exc_val.args])]
+            write_log(mes, err_log=True)
             return False
 
     def add_parent_equal(self):
@@ -686,6 +695,12 @@ def recursive_dir(dir_name):
     return count
 
 
+def send_message(message):
+    if platform != "win32" and message:
+        path = Path(argv[0]).parent.joinpath('picker_bot.sh')
+        subprocess.call([path, '\n'.join(message)])
+
+
 if __name__ == '__main__':
     collector = []
     main_time = datetime.datetime.fromtimestamp(datetime.datetime.now().timestamp())
@@ -714,7 +729,6 @@ if __name__ == '__main__':
         else:
             write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена")
 
-    total_count.total = 10000000
     write_log(f"{'#' * width_text}\n{' Всего: ':-^{width_text}}\n{total_count}", overall=arguments.overall, bot=True)
     tm_stop = datetime.datetime.now()
     write_log(f"{' Закончено в: ' + tm_stop.strftime('%d/%m/%Y %H:%M') + ' ':+^{width_text}}",
@@ -733,5 +747,4 @@ if __name__ == '__main__':
               overall=arguments.overall)
 
     if collector and arguments.bot:
-        path = Path(argv[0]).parent.joinpath('picker_bot.sh')
-        subprocess.call([path, '\n'.join(collector)])
+        send_message(collector)
