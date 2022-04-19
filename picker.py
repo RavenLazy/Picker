@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3.9
+# !/usr/local/bin/python3.10
 
 #  coding: utf-8
 
@@ -147,18 +147,21 @@ def for_size(item):
 
 
 def create_path(namespace, values):
-    folder = getattr(namespace, 'folder')
-    for v in values:
-        r = folder.joinpath(v)
-        yield r
+    line = []
+    if values:
+        folder = getattr(namespace, 'folder')
+        for v in values:
+            line.append(folder.joinpath(v))
+    return line
 
 
 def read_path(namespace, values):
+    line = []
     for files in create_path(namespace, [values]):
         if files.exists():
-            with open(files, 'r') as f:
-                yield create_path(namespace, f.read().splitlines())
-    return None
+            with open(files, 'r', encoding='utf-8') as f:
+                line.extend(create_path(namespace, f.read().splitlines()))
+    return line
 
 
 class ActionFile(argparse.Action):
@@ -166,16 +169,21 @@ class ActionFile(argparse.Action):
         super().__init__(option_strings, dest, nargs, **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, 'Search', read_path(namespace, values))
+        values = read_path(namespace, values)
+        atr = create_path(namespace, getattr(namespace, 'Search')) or values
+        if len(set(values).intersection(atr)) == 0:
+            atr += values
+        setattr(namespace, 'Search', atr)
 
 
 class ActionSearch(ActionFile):
 
     def __call__(self, parser, namespace, values: list, option_string=None):
-        values = list(create_path(namespace, [values]))
-        if (atr := (getattr(namespace, 'Search') or values)) and values[0] not in atr:
+        values = create_path(namespace, [values])
+        atr = create_path(namespace, getattr(namespace, 'Search')) or values
+        if len(set(values).intersection(atr)) == 0:
             atr += values
-        setattr(namespace, self.dest, atr)
+        setattr(namespace, 'Search', atr)
 
 
 class ActionTrash(ActionFile):
@@ -229,6 +237,9 @@ def alternative_parsers():
     logged.add_argument("-bot", action="store_true", help="Отправка результата в телеграмм-канал. "
                                                           "По умолчанию: <%(default)s>")
 
+    logged.add_argument("-full", action="store_false", help="Вывод полной информации или только не нулевых значений. "
+                                                            "По умолчанию: <Только не нулевые значения>")
+
     arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0b')
 
     # Выставляем параметры для лог файла, если указан аргумент -log
@@ -247,10 +258,11 @@ def alternative_parsers():
 
     # Создаем список папок для поиска. Читаем файл .path или что задано в pathname
 
-    if command_argument.Search is None:
-        arg.set_defaults(Search=list(
-            *re_change(arg, command_argument, ['-p', '.path']).Search
-        ) or [command_argument.folder])
+    # if command_argument.Search is None:
+    arg.set_defaults(Search = re_change(arg, command_argument, ['-p', '.path']).Search)
+    # arg.set_defaults(Search=list(
+    #     *re_change(arg, command_argument, ['-p', '.path']).Search
+    # ) or [command_argument.folder])
 
     if command_argument.trash is None:
         arg.set_defaults(trash=re_change(arg, command_argument, ['-t', NAME_MOVE_DIR]).trash)
@@ -374,6 +386,7 @@ counter_text = ("Объектов", "Количество папок", "Коли
                 "Размер освобожденного места")
 
 
+# Todo: Хочу правильное форматирование по длине числа!
 class Counter:
     """
     Счетчик\n
@@ -701,6 +714,7 @@ def send_message(message):
         subprocess.call([path, '\n'.join(message)])
 
 
+# Главный модуль
 if __name__ == '__main__':
     collector = []
     main_time = datetime.datetime.fromtimestamp(datetime.datetime.now().timestamp())
