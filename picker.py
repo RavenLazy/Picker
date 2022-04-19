@@ -1,5 +1,4 @@
-# !/usr/local/bin/python3.10
-
+#!/usr/local/bin/python3.10
 #  coding: utf-8
 
 # -----------------------------------------------------------------------------------
@@ -237,7 +236,7 @@ def alternative_parsers():
     logged.add_argument("-bot", action="store_true", help="Отправка результата в телеграмм-канал. "
                                                           "По умолчанию: <%(default)s>")
 
-    logged.add_argument("-full", action="store_false", help="Вывод полной информации или только не нулевых значений. "
+    logged.add_argument("-zero", action="store_false", help="Вывод полной информации или только не нулевых значений. "
                                                             "По умолчанию: <Только не нулевые значения>")
 
     arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0b')
@@ -260,9 +259,6 @@ def alternative_parsers():
 
     # if command_argument.Search is None:
     arg.set_defaults(Search = re_change(arg, command_argument, ['-p', '.path']).Search)
-    # arg.set_defaults(Search=list(
-    #     *re_change(arg, command_argument, ['-p', '.path']).Search
-    # ) or [command_argument.folder])
 
     if command_argument.trash is None:
         arg.set_defaults(trash=re_change(arg, command_argument, ['-t', NAME_MOVE_DIR]).trash)
@@ -381,13 +377,8 @@ def human_read_format(size):
     return f"{size / 1024 ** pwr:.2f} {suff[pwr]}"
 
 
-counter_text = ("Объектов", "Количество папок", "Количество файлов", "Пропущено файлов", "Пропущено папок",
-                "Удалено папок", "Перемещено файлов", "Размер перемещенных файлов", "Удалено файлов",
-                "Размер освобожденного места")
-
-
-# Todo: Хочу правильное форматирование по длине числа!
 class Counter:
+
     """
     Счетчик\n
     ----\n
@@ -400,9 +391,15 @@ class Counter:
     - delete_files: Удалено файлов\n
     - delete_folders: Удалено папок\n
     """
+    counter_text = {"total": "Объектов", "folder": "Количество папок", "files": "Количество файлов",
+                    "exclude_files": "Пропущено файлов", "exclude_folders": "Пропущено папок",
+                    "delete_folders": "Удалено папок", "move_files": "Перемещено файлов",
+                    "move_files_size": "Размер перемещенных файлов", "delete_files": "Удалено файлов",
+                    "delete_files_size": "Размер освобожденного места"}
 
-    __slots__ = ("total", "folder", "files", "exclude_files", "exclude_folders", "delete_folders", "move_files",
-                 "move_files_size", "delete_files", "delete_files_size")
+    __slots__ = tuple(counter_text.keys())
+
+    __para__ = ("move_files", "move_files_size", "delete_files", "delete_files_size")
 
     def __init__(self):
         self.total = 0  # Всего объектов в папке
@@ -426,22 +423,54 @@ class Counter:
         return self
 
     def __str__(self):
-        message = {}
-        m = 0
-        for e, i in enumerate(self.__slots__):
-            message.update({i: (counter_text[e], self.__getattribute__(i))})
-            if (ll := len(counter_text[e])) > m:
-                m = ll
+        return self.get_text()
 
-        s = list(get_list(message, self.__slots__[:5], form="key:  value"))
-        s += list(get_list(message, self.__slots__[6:], form="key:  value --> key:  value"))
-        return '\n'.join(s)
+    def get_text(self):
+        message = Message(self)
+        message.get_len()
+        text = []
+        it = iter(self.counter_text.items())
+        for key, value in it:
+            if ((val := getattr(self, key)) != 0 and arguments.zero) or arguments.zero is False:
+                text += [f"{value: <{message.len_text}} : {val}"]
+                if key in self.__para__:
+                    key_next, value_next = next(it)
+                    txt = f"{value_next:<{message.len_text2}} : {human_read_format(getattr(self, key_next))}"
+                    text += [f"{text.pop():<{message.len_text + message.len_value + 5}}" + txt]
+        if len(text) == 0:
+            return 'В данной папке ничего не найдено!'
+        return '\n'.join(text)
 
     def __len__(self):
         return len(self.__slots__)
 
 
-def get_list(message: dict, lst: list | tuple, form="key:  value"):
+class Message:
+    def __init__(self, namespace: Counter):
+        self.messaging = []
+        self.len_value = 0
+        self.len_text = 0
+        self.len_text2 = 0
+        self.__namespace__ = namespace
+        self.__size__ = self.__namespace__.__para__[1::2]
+
+    def _get_len1(self):
+        max_text = [(key, val := str(getattr(self.__namespace__, value)), len(key), len(val)) for value, key in
+                    self.__namespace__.counter_text.items() if value not in self.__size__]
+        self.len_value = max(max_text, key=lambda x: x[3])[3]
+        self.len_text = max(max_text, key=lambda x: x[2])[2]
+
+    def _get_len2(self):
+        max_text = [(key, val := str(getattr(self.__namespace__, value)), len(key), len(val)) for value, key in
+                    self.__namespace__.counter_text.items() if value in self.__size__]
+        self.len_text2 = max(max_text, key=lambda x: x[2])[2]
+
+    def get_len(self):
+        self._get_len1()
+        self._get_len2()
+
+
+def get_list(message: dict, lst: list | tuple, max_txt, max_value, form="key:  value"):
     form = form.split("-->")
     m = [message[x] for x in lst]
     start, stop, step = 0, len(form), len(form)
@@ -449,7 +478,7 @@ def get_list(message: dict, lst: list | tuple, form="key:  value"):
         st = ''
         for en, k in enumerate(zip(form, m[start:stop])):
             pattern, (name, value) = k
-            st += pattern.replace("key", f"{name:<{18 + en * 10}}")
+            st += pattern.replace("key", f"{'':>{en * max_value}}{name:<{max_txt[en]}}")
             if en > 0:
                 st = st.replace("value", human_read_format(value))
             else:
