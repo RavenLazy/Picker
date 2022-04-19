@@ -258,7 +258,7 @@ def alternative_parsers():
     # Создаем список папок для поиска. Читаем файл .path или что задано в pathname
 
     # if command_argument.Search is None:
-    arg.set_defaults(Search = re_change(arg, command_argument, ['-p', '.path']).Search)
+    arg.set_defaults(Search=re_change(arg, command_argument, ['-p', '.path']).Search)
 
     if command_argument.trash is None:
         arg.set_defaults(trash=re_change(arg, command_argument, ['-t', NAME_MOVE_DIR]).trash)
@@ -391,6 +391,7 @@ class Counter:
     - delete_files: Удалено файлов\n
     - delete_folders: Удалено папок\n
     """
+    # Ключи должны соответствовать аттрибутам класса
     counter_text = {"total": "Объектов", "folder": "Количество папок", "files": "Количество файлов",
                     "exclude_files": "Пропущено файлов", "exclude_folders": "Пропущено папок",
                     "delete_folders": "Удалено папок", "move_files": "Перемещено файлов",
@@ -441,9 +442,6 @@ class Counter:
             return 'В данной папке ничего не найдено!'
         return '\n'.join(text)
 
-    def __len__(self):
-        return len(self.__slots__)
-
 
 class Message:
     def __init__(self, namespace: Counter):
@@ -468,23 +466,6 @@ class Message:
     def get_len(self):
         self._get_len1()
         self._get_len2()
-
-
-def get_list(message: dict, lst: list | tuple, max_txt, max_value, form="key:  value"):
-    form = form.split("-->")
-    m = [message[x] for x in lst]
-    start, stop, step = 0, len(form), len(form)
-    for _ in range(len(m) // step):
-        st = ''
-        for en, k in enumerate(zip(form, m[start:stop])):
-            pattern, (name, value) = k
-            st += pattern.replace("key", f"{'':>{en * max_value}}{name:<{max_txt[en]}}")
-            if en > 0:
-                st = st.replace("value", human_read_format(value))
-            else:
-                st = st.replace("value", f"{value}")
-        yield st
-        start, stop = start + step, stop + step
 
 
 def change_parent_equal(item: dict) -> dict:
