@@ -442,6 +442,9 @@ class Counter:
             return 'В данной папке ничего не найдено!'
         return '\n'.join(text)
 
+    def __len__(self):
+        return 0
+
 
 class Message:
     def __init__(self, namespace: Counter):
@@ -606,12 +609,12 @@ class FStat:
         self.count = self.parent_rule.count
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_val:
-            s = traceback.extract_tb(exc_tb)
-            mes = [f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} :: "
-                   f"{self.parent_rule.folders}\n"
-                   f"{traceback.format_list(s)[0]}{exc_val}", "^" * sum([len(x) for x in exc_val.args])]
-            write_log(mes, err_log=True)
+    #     if exc_val:
+    #         s = traceback.extract_tb(exc_tb)
+    #         mes = [f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} :: "
+    #                f"{self.parent_rule.folders}\n"
+    #                f"{traceback.format_list(s)[0]}{exc_val}", "^" * sum([len(str(x)) for x in exc_val.args])]
+    #         write_log(mes, err_log=True)
             return False
 
     def add_parent_equal(self):
@@ -668,12 +671,8 @@ class FStat:
         obj.equals = dict(self._match_return(obj.folders.name))
         obj.lock = any([x[1] for x in obj.equals.values()])
         obj.rule = self.get_bool_match(obj)
-        if obj.equals.get('@') is None:
+        if obj.equals.get('@') is None and obj.equals:
             obj.count = get_count(obj.folders)
-        else:
-            obj.count.files = 1
-            obj.count.folder = 1
-            obj.count.total = 1
         return obj
 
     @staticmethod
@@ -685,16 +684,21 @@ class FStat:
             return False
         return rules
 
+    def list_folder(self, folders):
+        for files in folders.iterdir():
+            obj = self.get_info(files)
+            mx = self.sort(files)
+            yield mx, files, obj
+
     @property
     def iterdir(self):
         _log = []
         move_old_dir = arguments.trash_day.joinpath(self.parent_rule.folders.as_posix().replace(
             f"{arguments.folder.as_posix()}/", ""))
-        for files in sorted(self.parent_rule.folders.iterdir(), key=self.sort):
-            rules = self.get_info(files)
+        for _, files, rules in sorted(self.list_folder(self.parent_rule.folders)):
             if rules.equals and rules.rule["-"] is False:
                 rules.deep = self.parent_rule.deep
-                if isinstance((ret := self.work_rules(rules)), Analyze):
+                if isinstance((ret := self.work_rules(rules)), Analyze) and files.is_dir():
                     yield ret
                 elif ret is False:
                     continue
