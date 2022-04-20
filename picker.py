@@ -48,6 +48,8 @@ import argparse
 from shutil import rmtree
 import traceback
 
+VERSION = '1.0c'
+
 CREATION_TIME = 0
 MODIFICATION_TIME = 1
 ACCESS_TIME = 2
@@ -201,8 +203,8 @@ def alternative_parsers():
     prog_name = PROG.split('.py')[0]
     default = {True: 'Включено', False: 'Выключено'}
 
-    arg = argparse.ArgumentParser(description="Перенос старых файлов в отдельную директорию с сохранением путей",
-                                  prog=prog_name)
+    arg = argparse.ArgumentParser(description=f"Перенос старых файлов в отдельную директорию с сохранением путей. "
+                                              f"%(prog)s версия {VERSION}", prog=prog_name)
 
     search_folder = arg.add_argument_group('Main command')
     logged = arg.add_argument_group('Logger', 'Управление выводом в лог-файл.')
@@ -238,7 +240,7 @@ def alternative_parsers():
     logged.add_argument("-zero", action="store_false", help=f"Вывод информации и с нулевыми значениями: "
                                                             f"<{default[False]}>")
 
-    arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0с')
+    arg.add_argument('--version', "-V", action='version', version=f'%(prog)s {VERSION}')
 
     # Выставляем параметры для лог файла, если указан аргумент -log
 
