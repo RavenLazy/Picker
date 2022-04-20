@@ -517,20 +517,40 @@ def delta(znak, elem, max_time=None):
 class Deleter:
     def __new__(cls, obj: Analyze, old_dir: Path, count: Counter, *args):
         if obj.folders.is_dir():
-            ret = cls.work_folder(obj, count)
+            ret = cls.work_folder(obj, old_dir, count)
         else:
             ret = cls.work_files(obj, old_dir, count)
         return ret
 
     @classmethod
-    def work_folder(cls, elem: Analyze, count: Counter):
+    def get_size(cls, elem: Path, size=0, fil=0, fol=0):
+        for files in elem.iterdir():
+            if files.is_file():
+                size += files.stat().st_size
+                fil += 1
+            else:
+                fol += 1
+                size, fil, fol = cls.get_size(files, size, fil, fol)
+        return size, fil, fol
+
+    @classmethod
+    def work_folder(cls, elem: Analyze, old: Path, count: Counter):
         ss = elem.count.files - (elem.count.move_files + elem.count.delete_files) + \
              elem.count.folder - elem.count.delete_folders
         if (is_fast := elem.rule["@"]) or (ss == 0 and elem.lock is False):
-            fast_deleter(elem)
             count.delete_folders += 1
             if is_fast:
+                if ss > 0 and arguments.is_old is False:
+                    txt = f"Переносим папку с содержимым: {elem.folders.as_posix()!r}"
+                    elem.count.move_files_size, elem.count.files, elem.count.folder = cls.get_size(elem.folders)
+                    count.move_files += elem.count.files
+                    count.delete_folders += elem.count.folder
+                    count.move_files_size += elem.count.move_files_size
+
+                    replace(elem, old)
+                    return txt, count
                 txt = f"Удаление папки с содержимым: {elem.folders.as_posix()!r}"
+                fast_deleter(elem)
             else:
                 txt = f"Удаляем папку: {elem.folders.as_posix()!r}"
             return txt, count
@@ -648,8 +668,22 @@ class FStat:
         obj.equals = dict(self._match_return(obj.folders.name))
         obj.lock = any([x[1] for x in obj.equals.values()])
         obj.rule = self.get_bool_match(obj)
-        obj.count = get_count(obj.folders)
+        if obj.equals.get('@') is None:
+            obj.count = get_count(obj.folders)
+        else:
+            obj.count.files = 1
+            obj.count.folder = 1
+            obj.count.total = 1
         return obj
+
+    @staticmethod
+    def work_rules(rules):
+        preff = bool(rules.equals.get('@')) and rules.rule['@']
+        if rules.folders.is_dir() and preff:
+            return True
+        if rules.equals.get('@'):
+            return False
+        return rules
 
     @property
     def iterdir(self):
@@ -660,9 +694,10 @@ class FStat:
             rules = self.get_info(files)
             if rules.equals and rules.rule["-"] is False:
                 rules.deep = self.parent_rule.deep
-                if rules.folders.is_dir() and rules.rule["@"] is False:
-                    yield rules
-
+                if isinstance((ret := self.work_rules(rules)), Analyze):
+                    yield ret
+                elif ret is False:
+                    continue
                 if deleter := Deleter(rules, move_old_dir, self.count):
                     txt, self.count = deleter
                     _log.append(txt)
