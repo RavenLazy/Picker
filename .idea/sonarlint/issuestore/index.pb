@@ -1,0 +1,3 @@
+
+s
+C.idea/shelf/Uncommitted_changes_before_rebase__New_changelist_2.xml,4\f\4f6ad5f560034069dfe4a8076a26045081869db8

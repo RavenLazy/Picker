@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/1" />
+      <excludeFolder url="file://$MODULE_DIR$/arc" />
+      <excludeFolder url="file://$MODULE_DIR$/Count" />
+      <excludeFolder url="file://$MODULE_DIR$/env" />
+      <excludeFolder url="file://$MODULE_DIR$/Old1" />
+      <excludeFolder url="file://$MODULE_DIR$/Olds" />
+      <excludeFolder url="file://$MODULE_DIR$/Software" />
+      <excludeFolder url="file://$MODULE_DIR$/Test" />
+      <excludeFolder url="file://$MODULE_DIR$/Test1" />
+      <excludeFolder url="file://$MODULE_DIR$/Trash" />
+      <excludeFolder url="file://$MODULE_DIR$/01-03-2022" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

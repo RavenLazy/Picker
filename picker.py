@@ -199,11 +199,13 @@ def re_change(args: argparse.ArgumentParser, line, value):
 
 def alternative_parsers():
     prog_name = PROG.split('.py')[0]
+    default = {True: 'Включено', False: 'Выключено'}
+
     arg = argparse.ArgumentParser(description="Перенос старых файлов в отдельную директорию с сохранением путей",
                                   prog=prog_name)
 
-    search_folder = arg.add_argument_group()
-    logged = arg.add_argument_group()
+    search_folder = arg.add_argument_group('Main command')
+    logged = arg.add_argument_group('Logger', 'Управление выводом в лог-файл.')
 
     arg.add_argument("command", choices=["execute", "test"],
                      help="<execute> работа по заданным правилам. <test> прогон по папкам без изменения.")
@@ -212,40 +214,37 @@ def alternative_parsers():
                      type=Path, help=f"Откуда начинаем искать")
 
     search_folder.add_argument("-Search", type=str, action=ActionSearch,
-                               metavar="<Folder1> <Folder2> ... <FolderNNN>",
-                               help=f"Папки поиска.")
+                               metavar="<Folder1>...<FolderNNN>", help=f"Папки поиска.")
 
     search_folder.add_argument("-pathname", type=str, default='.path', metavar=".path", action=ActionFile,
-                               help=f"Имя файла с папками для поиска. По умолчанию: <%(default)s>")
+                               help=f"Имя файла с папками для поиска: <%(default)s>")
 
     arg.add_argument("-rule", default='.rule', metavar="<'.rule'>",
-                     help="Имя файла с правилами. По умолчанию: %(metavar)s")
+                     help="Имя файла с правилами: %(metavar)s")
 
     arg.add_argument("-trash", nargs=1, metavar="<'Trash'>", type=str, action=ActionTrash,
-                     help=f"Имя папки в которую будут переносится старые файлы. По умолчанию: %(metavar)s")
+                     help=f"Имя папки в которую будут переносится старые файлы: %(metavar)s")
+
+    arg.add_argument("-console", action="store_true", help=f"Выводить в консоль: <{default[False]}>")
 
     logged.add_argument("-log", action="store_true",
-                        help="Включает запись лога. Дополнительные параметры [-name log.log] [-size 10000] [-append] "
-                             "По умолчанию: <%(default)s>")
-
-    logged.add_argument("-console", action="store_true", help="Выводить в консоль. По умолчанию <%(default)s>")
+                        help=f"Включает запись лога: <{default[False]}>")
 
     logged.add_argument("-overall", action="store_true",
-                        help="Вывести только общий результат. По умолчанию: <%(default)s>")
+                        help=f"Вывести только общий результат: <{default[False]}>")
 
-    logged.add_argument("-bot", action="store_true", help="Отправка результата в телеграмм-канал. "
-                                                          "По умолчанию: <%(default)s>")
+    logged.add_argument("-bot", action="store_true", help=f"Отправка результата в телеграмм-канал: <{default[False]}>")
 
-    logged.add_argument("-zero", action="store_false", help="Вывод полной информации или только не нулевых значений. "
-                                                            "По умолчанию: <Только не нулевые значения>")
+    logged.add_argument("-zero", action="store_false", help=f"Вывод информации и с нулевыми значениями: "
+                                                            f"<{default[False]}>")
 
-    arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0b')
+    arg.add_argument('--version', "-V", action='version', version='%(prog)s 1.0с')
 
     # Выставляем параметры для лог файла, если указан аргумент -log
 
-    logged.add_argument("-name", nargs=1, action=ActionTrash, help=f"Имя лог-файла <{NAME_LOG}>")
-    logged.add_argument("-size", default=10000, type=for_size, help="Размер лога <%(default)s>")
-    logged.add_argument("-append", action="store_true", help="Продолжать дописывать <%(default)s>")
+    logged.add_argument("-name", nargs=1, action=ActionTrash, help=f"Имя лог-файла: <{NAME_LOG}>")
+    logged.add_argument("-size", default=10000, type=for_size, help="Размер лога: <%(default)s>")
+    logged.add_argument("-append", action="store_false", help=f"Продолжать дописывать: <{default[True]}>")
 
     command_argument = arg.parse_args()
     # Имя лог файла
@@ -272,16 +271,19 @@ def alternative_parsers():
 
 
 def log():
-    if arguments.log and arguments.name.exists():
-        if arguments.name.stat().st_size >= arguments.size:
-            name = arguments.name.as_posix().split(".")[0]
-            fullname = Path('-'.join([name, STR_NOW_DATE + arguments.name.suffix]))
-            count = 0
-            while fullname.exists():
-                count += 1
-                fullname = Path(
-                    '-'.join([name, STR_NOW_DATE + f"_{str(count).zfill(3)}{arguments.name.suffix}"]))
-            arguments.name.replace(fullname)
+    if arguments.append:
+        if arguments.log and arguments.name.exists():
+            if arguments.name.stat().st_size >= arguments.size:
+                name = arguments.name.as_posix().split(".")[0]
+                fullname = Path('-'.join([name, STR_NOW_DATE + arguments.name.suffix]))
+                count = 0
+                while fullname.exists():
+                    count += 1
+                    fullname = Path(
+                        '-'.join([name, STR_NOW_DATE + f"_{str(count).zfill(3)}{arguments.name.suffix}"]))
+                arguments.name.replace(fullname)
+    elif arguments.name.exists():
+        arguments.name.unlink(missing_ok=True)
 
 
 def get_message(text):
@@ -609,13 +611,13 @@ class FStat:
         self.count = self.parent_rule.count
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-    #     if exc_val:
-    #         s = traceback.extract_tb(exc_tb)
-    #         mes = [f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} :: "
-    #                f"{self.parent_rule.folders}\n"
-    #                f"{traceback.format_list(s)[0]}{exc_val}", "^" * sum([len(str(x)) for x in exc_val.args])]
-    #         write_log(mes, err_log=True)
-            return False
+        if exc_val:
+            s = traceback.extract_tb(exc_tb)
+            mes = [f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} :: "
+                   f"{self.parent_rule.folders}\n"
+                   f"{traceback.format_list(s)[0]}{exc_val}", "^" * sum([len(str(x)) for x in exc_val.args])]
+            write_log(mes, err_log=True)
+        return False
 
     def add_parent_equal(self):
         for key, value in self.parent_rule.equals.items():
