@@ -274,8 +274,11 @@ def alternative_parsers():
 
     logged.add_argument("-bot", action="store_true", help=f"Отправка результата в телеграмм-канал: <{default[False]}>")
 
-    logged.add_argument("-zero", action="store_false", help=f"Вывод информации и с нулевыми значениями: "
+    logged.add_argument("-zero", action="store_false", help=f"Вывод информации с нулевыми значениями: "
                                                             f"<{default[False]}>")
+
+    logged.add_argument("-full", action="store_false", help=f"Выводить только строки с информацией об "
+                                                            f"освобождаемом объеме: <{default[True]}>")
 
     arg.add_argument('--version', "-V", action='version', version=f'%(prog)s {VERSION}')
 
@@ -360,7 +363,7 @@ def write_log(text, err_log=False, overall=False, bot=False):
 
     #  Выводим текст в файл
     if (arguments.log and get_output(arguments.log, overall)) or err_log:
-        with open(name_log, "a") as f:
+        with open(name_log, "a", encoding='utf-8') as f:
             if lines:
                 f.writelines([f"{line}\n" for line in text])
             else:
@@ -479,6 +482,8 @@ class Counter:
                     key_next, value_next = next(it)
                     txt = f"{value_next:<{message.len_text2}} : {human_read_format(getattr(self, key_next))}"
                     text += [f"{text.pop():<{message.len_text + message.len_value + 5}}" + txt]
+                elif arguments.full is False:
+                    text.pop()
         if len(text) == 0:
             return 'В данной папке ничего не найдено!'
         return '\n'.join(text)
