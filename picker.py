@@ -567,13 +567,13 @@ class Deleter:
     def work_files(cls, elem: Analyze, old: Path, count: Counter):
         if (is_max := elem.rule["!"] is False) or elem.rule["+"]:
             if arguments.is_old:
-                delete(elem)
-                count.delete_files += 1
                 count.delete_files_size += elem.folders.stat().st_size
+                count.delete_files += 1
+                delete(elem)
                 return f"Удаляем файл: {elem.folders.as_posix()!r}", count
-            replace(elem, old)
-            count.move_files += 1
             count.move_files_size += elem.folders.stat().st_size
+            count.move_files += 1
+            replace(elem, old)
             if is_max:
                 txt = f"Групповое перемещение: {elem.folders.as_posix()!r}"
             else:
@@ -599,7 +599,7 @@ def replace(elem: Analyze, old_dir: Path):
     if arguments.work:
         if old_dir.exists() is False:
             old_dir.mkdir(parents=True)
-        elem.folders.replace(old_dir.joinpath(elem.folders.parts[-1]))
+        elem.folders.replace(old_dir.joinpath(elem.folders.name))
 
 
 class FStat:
