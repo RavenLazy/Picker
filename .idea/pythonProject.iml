@@ -13,6 +13,8 @@
       <excludeFolder url="file://$MODULE_DIR$/Test1" />
       <excludeFolder url="file://$MODULE_DIR$/Trash" />
       <excludeFolder url="file://$MODULE_DIR$/01-03-2022" />
+      <excludeFolder url="file://$MODULE_DIR$/.mypy_cache/3.10" />
+      <excludeFolder url="file://$MODULE_DIR$/venv" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
