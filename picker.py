@@ -130,13 +130,6 @@ def add_default_rule():
     return None
 
 
-def add_in_list_set(array: list, text: str):
-    """Создаем список с неповторяющимися элементами"""
-    if text not in array:
-        return array + [text]
-    return array
-
-
 def decompress(el: list, folders: Path, dp: bool):
     # Раскладываем время из файла правил
     name: str
@@ -167,22 +160,6 @@ def return_list(text, folders, deep=False):
         yield name, args
 
 
-def return_list_main(elem: argparse.Namespace):
-    """Для создания списка из аргументов командной строки"""
-    for item in elem.__dict__.values():
-        if type(item) == list and len(item) > 0:
-            vv = []
-            for values in item:
-                if type(values) == list:
-                    vv.extend(values)
-                else:
-                    yield values
-            if vv:
-                yield vv
-            continue
-        yield item
-
-
 def for_size(item):
     # Переводим буквенный код размера файла в числовой
     ident: str
@@ -211,47 +188,8 @@ def read_path(namespace, values):
     return line
 
 
-class ActionFile(argparse.Action):
-    def __init__(self, option_strings, dest, nargs=None, **kwargs):
-        super().__init__(option_strings, dest, nargs, **kwargs)
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        values = read_path(namespace, values)
-        atr = create_path(namespace, getattr(namespace, 'Search')) or values
-        if len(set(values).intersection(atr)) == 0:
-            atr += values
-        setattr(namespace, 'Search', atr)
-
-
-class ActionSearch(ActionFile):
-
-    def __call__(self, parser, namespace, values: list, option_string=None):
-        values = create_path(namespace, [values])
-        atr = create_path(namespace, getattr(namespace, 'Search')) or values
-        if len(set(values).intersection(atr)) == 0:
-            atr += values
-        setattr(namespace, 'Search', atr)
-
-
-class ActionTrash(ActionFile):
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        values = list(create_path(namespace, values))[0]
-        setattr(namespace, self.dest, values)
-
-
 def set_bit(num, pos):
     return num | 1 << pos
-
-
-class ActionCount(ActionFile):
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        four = 4 in values
-        values = max(set(values).intersection([1, 2, 3]) or self.const)
-        bit = (0, 0b10, 0b110, 0b1110)[values]
-        values = (bit | 0b10000 if four else bit) | getattr(namespace, self.dest)
-        setattr(namespace, self.dest, values)
 
 
 def re_change(args: argparse.ArgumentParser, line, value):
@@ -289,7 +227,7 @@ def alternative_parsers():
 
     logged.add_argument("-console", nargs='*', default=0, type=int, action=ActionCount, const=[2],
                         help=f"Выводить в консоль: -c = %(const)s, -c 1 = размеры больше нуля, "
-                        f"-c 2 = не нулевые размеры, -c 3 = выводить всё, [4] - выводить информацию.")
+                             f"-c 2 = не нулевые размеры, -c 3 = выводить всё, [4] - выводить информацию.")
 
     logged.add_argument("-log", action=ActionCount, default=0, const=[2], type=int, nargs='*',
                         help=f"Писать в файл: -l = %(const)s, -l 1 = размеры больше нуля, "
@@ -341,7 +279,7 @@ def create_log():
                     count += 1
                     fullname = Path(
                         '-'.join([name, STR_NOW_DATE + f"_{str(count).zfill(3)}{arguments.name.suffix}"]))
-                arguments.name.replace(fullname)
+                arguments.name.replace_files(fullname)
     elif arguments.name and arguments.name.exists():
         arguments.name.unlink(missing_ok=True)
 
@@ -350,15 +288,156 @@ def get_bit(num: int, pos: int) -> int:
     return num >> pos & 1
 
 
-def get_text(text):
-    for el in text:
-        for e in el:
-            yield from e
-
-
 def save_log(text, name):
     with open(name, encoding='utf-8', mode='a') as f:
         f.writelines(text)
+
+
+def send_message(message):
+    if platform != "win32" and message:
+        path = Path(argv[0]).parent.joinpath('picker_bot.sh')
+        txt = map(lambda x: re.sub(r"[-+*#=]*", "", x), message)
+        txt = ''.join(map(lambda x: re.sub(r" {2,}", " ", x), txt))
+        subprocess.call([path, txt])
+
+
+def return_time_file(name: Path, type_time):
+    return {ACCESS_TIME: name.stat().st_atime, MODIFICATION_TIME: name.stat().st_mtime,
+            CREATION_TIME: name.stat().st_ctime}[type_time]
+
+
+def replace_template(pat, item):
+    # Символы в item меняем на подстановочные знаки в pat
+    for elem in item:
+        for key, value in pat.items():
+            elem = elem.replace(key, value)
+        yield elem
+
+
+def normal_date(item: str):
+    # Переводим заданное время в секунды
+    codes: str
+    times: str | float
+
+    times, codes = re.findall(r"([-\d]+)+(\w)", item)[0]
+
+    if codes.lower() == "n":
+        return CURRENT_DATE
+
+    return float(times) * {"h": 3600,
+                           "d": 86400,
+                           "m": 2592000,
+                           "y": 31557600}.get(codes.lower(), 0)
+
+
+def get_count(elem: Path):
+    ret = Counter()
+    if elem.is_dir():
+        ret.total = len(obj := [(files, files.is_file()) for files in elem.iterdir()])
+        ret.files = len([x for x in obj if x[1]])
+        ret.folder = ret.total - ret.files
+    else:
+        ret.total = 1
+        ret.files = 1
+    return ret
+
+
+def human_read_format(size):
+    suff = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ", "ЭБ", "ЗБ", "ЙБ"]
+    if size == 0:
+        return f"0 {suff[0]}"
+    pwr = math.floor(math.log(size, 1024))
+    if size > 1024 ** (len(suff) - 1):
+        return "не знаю как назвать такое число :)"
+    return f"{size / 1024 ** pwr:.2f} {suff[pwr]}"
+
+
+def change_parent_equal(item: dict) -> dict:
+    ret = {f"{key}*": (value[0], value[1] if value[2] > 0 else False, value[2]) for key, value in item.items()}
+    return ret
+
+
+def delta(znak, elem, max_time=None):
+    if isinstance(elem, dict):
+        fl = elem.get(znak, False)
+    else:
+        fl = elem.equals.get(znak, False)
+    if fl is False:
+        return False
+    date, *_ = fl
+    if max_time:
+        return int(CURRENT_DATE - max_time) > date
+    ret = int(CURRENT_DATE - return_time_file(elem.folders, MODIFICATION_TIME))
+    return ret <= date if znak == '-' else ret > date
+
+
+def _add_znak(item, znak):
+    return list(map(lambda x: znak + x if x[0] not in list_includes_znak else x, item))
+
+
+def get_deep(rule_text, dp):
+    tmp = []
+    rule_text += [elem for elem in dp]
+    if len(rule_text) == 0:
+        yield '', ''
+    for name, args in decompress(rule_text, arguments.folder, True):
+        date, lock, deep = args
+
+        if name in tmp:
+            continue
+        tmp.append(name)
+        lock = 'L' if len(lock) == 0 else lock
+        if deep - 1 != -1:
+            if deep > 0:
+                deep -= 1
+            rl = ":".join([name, date, lock, str(deep)])
+            yield rl, rl
+        else:
+            yield ":".join([name, date, lock, '0']), ''
+
+
+def reduce(elem: Path, files, folders):
+    a = {True: (1, 0), False: (0, 1)}[elem.is_file()]
+    return map(sum, zip(a, (files, folders)))
+
+
+class ActionFile(argparse.Action):
+    def __init__(self, option_strings, dest, nargs=None, **kwargs):
+        super().__init__(option_strings, dest, nargs, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        values = read_path(namespace, values)
+        atr = create_path(namespace, getattr(namespace, 'Search')) or values
+        if len(set(values).intersection(atr)) == 0:
+            atr += values
+        setattr(namespace, 'Search', atr)
+
+
+class ActionSearch(ActionFile):
+
+    def __call__(self, parser, namespace, values: list, option_string=None):
+        values = create_path(namespace, [values])
+        atr = create_path(namespace, getattr(namespace, 'Search')) or values
+        if len(set(values).intersection(atr)) == 0:
+            atr += values
+        setattr(namespace, 'Search', atr)
+
+
+class ActionTrash(ActionFile):
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        values = list(create_path(namespace, values))[0]
+        setattr(namespace, self.dest, values)
+
+
+class ActionCount(ActionFile):
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        four = 4 in values
+        values = max(set(values).intersection([1, 2, 3]) or self.const)
+        bit = (0, 0b10, 0b110, 0b1110)[values]
+        values = (bit | 0b10000 if four else bit) | getattr(namespace, self.dest)
+        setattr(namespace, self.dest, values)
 
 
 class Logger:
@@ -452,28 +531,6 @@ class Logger:
 
         self.all = old
 
-    def send_console(self, forced=False):
-        # Создаем списки для вывода
-        for _, console in self.get_from_all([int_console], forced):
-            print(console)
-
-    def send_bot(self, forced=False):
-        bot = []
-        for _, text in self.get_from_all([int_bot], forced):
-            bot.append(f"{text}\n")
-        if bot:
-            send_message(bot)
-
-    def send_log(self, forced=False, err_log=False):
-        name = arguments.error_log if err_log else arguments.name
-        if name:
-            _t = []
-            for _, text in self.get_from_all([int_log], forced):
-                text += '\n'
-                _t.append(text)
-            if _t:
-                save_log(_t, name)
-
     def send_all(self, sending=None, forced=False):
         """
 
@@ -497,57 +554,6 @@ class Logger:
         if _b:
             send_message(_b)
         self.all.clear()
-
-
-def return_time_file(name: Path, type_time):
-    return {ACCESS_TIME: name.stat().st_atime, MODIFICATION_TIME: name.stat().st_mtime,
-            CREATION_TIME: name.stat().st_ctime}[type_time]
-
-
-def replace_template(pat, item):
-    # Символы в item меняем на подстановочные знаки в pat
-    for elem in item:
-        for key, value in pat.items():
-            elem = elem.replace(key, value)
-        yield elem
-
-
-def normal_date(item: str):
-    # Переводим заданное время в секунды
-    codes: str
-    times: str | float
-
-    times, codes = re.findall(r"([-\d]+)+(\w)", item)[0]
-
-    if codes.lower() == "n":
-        return CURRENT_DATE
-
-    return float(times) * {"h": 3600,
-                           "d": 86400,
-                           "m": 2592000,
-                           "y": 31557600}.get(codes.lower(), 0)
-
-
-def get_count(elem: Path):
-    ret = Counter()
-    if elem.is_dir():
-        ret.total = len(obj := [(files, files.is_file()) for files in elem.iterdir()])
-        ret.files = len([x for x in obj if x[1]])
-        ret.folder = ret.total - ret.files
-    else:
-        ret.total = 1
-        ret.files = 1
-    return ret
-
-
-def human_read_format(size):
-    suff = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ", "ЭБ", "ЗБ", "ЙБ"]
-    if size == 0:
-        return f"0 {suff[0]}"
-    pwr = math.floor(math.log(size, 1024))
-    if size > 1024 ** (len(suff) - 1):
-        return "не знаю как назвать такое число :)"
-    return f"{size / 1024 ** pwr:.2f} {suff[pwr]}"
 
 
 class Counter:
@@ -653,11 +659,6 @@ class Message:
         self._get_len2()
 
 
-def change_parent_equal(item: dict) -> dict:
-    ret = {f"{key}*": (value[0], value[1] if value[2] > 0 else False, value[2]) for key, value in item.items()}
-    return ret
-
-
 class Analyze:
     __slots__ = ("folders", "deep", "equals", "lock", "count", "rule")
 
@@ -685,18 +686,24 @@ class Analyze:
         return f"{self.folders.as_posix()!r}, deep={self.deep}, equals={self.equals}, lock={self.lock}\n{self.rule}\n"
 
 
-def delta(znak, elem, max_time=None):
-    if isinstance(elem, dict):
-        fl = elem.get(znak, False)
-    else:
-        fl = elem.equals.get(znak, False)
-    if fl is False:
-        return False
-    date, *_ = fl
-    if max_time:
-        return int(CURRENT_DATE - max_time) > date
-    ret = int(CURRENT_DATE - return_time_file(elem.folders, MODIFICATION_TIME))
-    return ret <= date if znak == '-' else ret > date
+def delete_folder(elem: Analyze):
+    """Удаляем папку со всем содержимым"""
+    if arguments.work:
+        rmtree(elem.folders.as_posix(), ignore_errors=True)
+
+
+def delete_files(elem: Analyze):
+    """Удаляем файл"""
+    if arguments.work:
+        elem.folders.unlink(missing_ok=True)
+
+
+def replace_files(elem: Analyze, old_dir: Path):
+    """Перемещаем файл"""
+    if arguments.work:
+        if old_dir.exists() is False:
+            old_dir.mkdir(parents=True)
+        elem.folders.replace(old_dir.joinpath(elem.folders.name))
 
 
 class Deleter:
@@ -732,13 +739,13 @@ class Deleter:
                     count.delete_folders += elem.count.folder
                     count.move_files_size += elem.count.move_files_size
 
-                    replace(elem, old)
+                    replace_files(elem, old)
                     return txt, count
                 txt = f"Удаление папки с содержимым: {elem.folders.as_posix()!r}"
-                fast_deleter(elem)
+                delete_folder(elem)
             else:
                 txt = f"Удаляем папку: {elem.folders.as_posix()!r}"
-                fast_deleter(elem)
+                delete_folder(elem)
             return txt, count
         return False
 
@@ -748,37 +755,17 @@ class Deleter:
             if arguments.is_old:
                 count.delete_files_size += elem.folders.stat().st_size
                 count.delete_files += 1
-                delete(elem)
+                delete_folder(elem)
                 return f"Удаляем файл: {elem.folders.as_posix()!r}", count
             count.move_files_size += elem.folders.stat().st_size
             count.move_files += 1
-            replace(elem, old)
+            replace_files(elem, old)
             if is_max:
                 txt = f"Групповое перемещение: {elem.folders.as_posix()!r}"
             else:
                 txt = f"Перемещаем файл: {elem.folders.as_posix()!r}"
             return txt, count
         return False
-
-
-def fast_deleter(elem: Analyze):
-    """Удаляем папку со всем содержимым"""
-    if arguments.work:
-        rmtree(elem.folders.as_posix(), ignore_errors=True)
-
-
-def delete(elem: Analyze):
-    """Удаляем файл"""
-    if arguments.work:
-        elem.folders.unlink(missing_ok=True)
-
-
-def replace(elem: Analyze, old_dir: Path):
-    """Перемещаем файл"""
-    if arguments.work:
-        if old_dir.exists() is False:
-            old_dir.mkdir(parents=True)
-        elem.folders.replace(old_dir.joinpath(elem.folders.name))
 
 
 class FStat:
@@ -903,40 +890,6 @@ class FStat:
         logger.send_all([int_log, int_console])
 
 
-def _add_znak(item, znak):
-    return list(map(lambda x: znak + x if x[0] not in list_includes_znak else x, item))
-
-
-def get_deep(rule_text, dp):
-    tmp = []
-    rule_text += [elem for elem in dp]
-    if len(rule_text) == 0:
-        yield '', ''
-    for name, args in decompress(rule_text, arguments.folder, True):
-        date, lock, deep = args
-
-        if name in tmp:
-            continue
-        tmp.append(name)
-        lock = 'L' if len(lock) == 0 else lock
-        if deep - 1 != -1:
-            if deep > 0:
-                deep -= 1
-            rl = ":".join([name, date, lock, str(deep)])
-            yield rl, rl
-        else:
-            yield ":".join([name, date, lock, '0']), ''
-
-
-def reduce(elem: Path, files, folders):
-    a = {True: (1, 0), False: (0, 1)}[elem.is_file()]
-    return map(sum, zip(a, (files, folders)))
-
-
-def _get_item(elem, last, index=0):
-    return elem[last.lastindex - 1][index]
-
-
 def recursive_dir(dir_name):
     count = Counter()
     with FStat(dir_name) as rules:
@@ -944,14 +897,6 @@ def recursive_dir(dir_name):
             count += recursive_dir(elem)
         count += rules.count
     return count
-
-
-def send_message(message):
-    if platform != "win32" and message:
-        path = Path(argv[0]).parent.joinpath('picker_bot.sh')
-        txt = map(lambda x: re.sub(r"[-+*#=]*", "", x), message)
-        txt = ''.join(map(lambda x: re.sub(r" {2,}", " ", x), txt))
-        subprocess.call([path, txt])
 
 
 # Главный модуль
@@ -980,7 +925,7 @@ if __name__ == '__main__':
             logger.write_log(total_parts)
             total_count += total_parts
         else:
-            logger.write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена", info=True)
+            logger.write_log(f"{file.as_posix()!r} заданная папка не найдена", info=True)
         logger.send_all([int_log, int_console])
 
     logger.write_log("#" * width_text)
