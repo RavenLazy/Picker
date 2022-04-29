@@ -110,7 +110,7 @@ list_includes_znak = ("@", "!", "+")
 
 old_date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}$")
 
-width_text = 125
+width_text = 200
 
 mask = {'log':      0b001,
         'console':  0b010,
@@ -248,7 +248,7 @@ class ActionCount(ActionFile):
 
     def __call__(self, parser, namespace, values, option_string=None):
         four = 4 in values
-        values = max(set(values).intersection([1, 2, 3]) or set(self.const).difference([4]))
+        values = max(set(values).intersection([1, 2, 3]) or self.const)
         bit = (0, 0b10, 0b110, 0b1110)[values]
         values = (bit | 0b10000 if four else bit) | getattr(namespace, self.dest)
         setattr(namespace, self.dest, values)
@@ -288,16 +288,16 @@ def alternative_parsers():
                      help=f"Имя папки в которую будут переносится старые файлы: %(metavar)s")
 
     logged.add_argument("-console", nargs='*', default=0, type=int, action=ActionCount, const=[2],
-                     help=f"Выводить в консоль: -c = %(const)s, -c 1 = размеры больше нуля, "
-                          f"-c 2 = не нулевые размеры, -c 3 = выводить всё")
+                        help=f"Выводить в консоль: -c = %(const)s, -c 1 = размеры больше нуля, "
+                        f"-c 2 = не нулевые размеры, -c 3 = выводить всё, [4] - выводить информацию.")
 
     logged.add_argument("-log", action=ActionCount, default=0, const=[2], type=int, nargs='*',
                         help=f"Писать в файл: -l = %(const)s, -l 1 = размеры больше нуля, "
-                             f"-l 2 = не нулевые размеры, -l 3 = выводить всё")
+                             f"-l 2 = не нулевые размеры, -l 3 = выводить всё, [4] - выводить информацию.")
 
-    logged.add_argument("-bot", action=ActionCount, default=0, nargs='*', const=[1, 4], type=int,
+    logged.add_argument("-bot", action=ActionCount, default=0, nargs='*', const=[1], type=int,
                         help=f"Отправка результата в телеграмм-канал: -b = %(const)s, -b 1 = размеры больше нуля, "
-                             f"-b 2 = не нулевые размеры, -b 3 = выводить всё")
+                             f"-b 2 = не нулевые размеры, -b 3 = выводить всё, [4] - выводить информацию.")
 
     arg.add_argument('--version', "-V", action='version', version=f'%(prog)s {VERSION}')
 
@@ -330,7 +330,7 @@ def alternative_parsers():
     return arg.parse_args()
 
 
-def log():
+def create_log():
     if arguments.append:
         if arguments.log and arguments.name.exists():
             if arguments.name.stat().st_size >= arguments.size:
@@ -380,47 +380,63 @@ class Logger:
         if type(tx) in (tuple, list):
             for elem in tx:
                 if isinstance(elem, Counter):
-                    for _b, _t in elem.get_text(four):
-                        yield _b, _t
+                    for _, _b, _t in elem.get_text(four):
+                        yield _, _b, _t
                 else:
-                    yield lvl, elem
+                    yield -1, lvl, elem
         else:
-            yield lvl, tx
+            yield -1, lvl, tx
 
     @staticmethod
-    def is_eq(bit, arg):
-        dif = arg & bit & 14 > 0  # Ищем совпадения и отбрасываем 4-ый бит
-        if dif and ((bb := get_bit(arg, 4)) == get_bit(bit, 4) or bb * 2) != 2:
-            return arg
-        return 0
-
-    def _is(self, lvl, arg, is_a):
-        if self.is_eq(lvl, arg) or (is_a and arg):
+    def _is(lvl, arg, info):
+        dif = arg & lvl & 14 or arg & info
+        # if self.is_eq(lvl, arg) or (info and arg):
+        if dif:
             return 1
         return 0
 
-    def write_log(self, text, is_all=False, is_bot=False, is_log=False, is_console=False):
+    def write_log(self, text, info=False):
         """
         Создаем буфер записей лога
 
         :param text: Передаваемый текст
-        :param is_all: Текст будет выводится во все выводы, если они указаны в коммандной строке
-        :param is_log: Сохраняем для вывода в лог принудительно
-        :param is_bot: Сохраняем для вывода в bot принудительно
-        :param is_console: Сохраняем для вывода в консоль
+        :param info: Вывод инфо=сообщений
         :return: None
         """
-        is_log |= is_all
-        is_bot |= is_all
-        is_console |= is_all
+        _add_info = 16 if info else 0
         lvl = set_bit(0, 3)
-        for bit, elem in self.get_container(lvl, text):
-            send_type = set_bit(0, self._is(bit, arguments.log, is_log) * int_log)
-            send_type |= set_bit(send_type, self._is(bit, arguments.console, is_console) * int_console)
-            send_type |= set_bit(send_type, self._is(bit, arguments.bot, is_bot) * int_bot)
+        size = None
+        txt = None
+        is_size = False
+        is_txt = False
+        for zero, bit, elem in self.get_container(lvl, text):
+            send_type = set_bit(0, self._is(bit, arguments.log, 16) * int_log)
+            send_type |= set_bit(send_type, self._is(bit, arguments.console, 16) * int_console)
+            send_type |= set_bit(send_type, self._is(bit, arguments.bot, 16) * int_bot)
+
+            if zero == 2 and is_size is False:
+                size = send_type, 'Перемещено или удалено: 0'
+                is_size = True
+            if zero == 1 and is_txt is False:
+                txt = send_type, 'Всего обработано: 0'
+                is_txt = True
+
+            send_type = set_bit(0, self._is(bit, arguments.log, _add_info) * int_log)
+            send_type |= set_bit(send_type, self._is(bit, arguments.console, _add_info) * int_console)
+            send_type |= set_bit(send_type, self._is(bit, arguments.bot, _add_info) * int_bot)
 
             if send_type > 1:
+                if zero == 1:
+                    is_txt = True
+                    txt = None
+                if zero == 2:
+                    is_size = True
+                    size = None
                 self.all.append((send_type, elem))
+        if txt:
+            self.all.append(txt)
+        if size:
+            self.all.append(size)
 
     def get_from_all(self, pos, forced):
         old = []
@@ -573,7 +589,7 @@ class Counter:
 
     def __iadd__(self, other):
         if type(self) == type(other):
-            for key in self.__slots__:
+            for key in self.counter_text:
                 value = other.__getattribute__(key) + self.__getattribute__(key)
                 self.__setattr__(key, value)
         else:
@@ -586,21 +602,24 @@ class Counter:
         text = []
         it = iter(self.counter_text.items())
         for key, value in it:
-            val = getattr(self, key)
-            if val > 0:
+            zero = 1
+            vals = getattr(self, key)
+            if vals > 0:
                 level = set_bit(0, 2)
             else:
                 level = set_bit(0, 3)
             level |= four
-            text += (level, f"{value: <{message.len_text}} : {val}"),
+            text += (zero, level, f"{value: <{message.len_text}} : {vals}"),
             if key in self.__para__:
-                level = set_bit(level, 1)
+                zero = 2
                 key_next, value_next = next(it)
                 val = getattr(self, key_next)
-                if val > 0:
-                    level = set_bit(level, 2)
+                if val or vals:
+                    level = set_bit(0, 1)
+                else:
+                    level = set_bit(0, 3)
                 txt = f"{value_next:<{message.len_text2}} : {human_read_format(val)}"
-                text += (level, f"{text.pop()[1]:<{message.len_text + message.len_value + 5}}" + txt),
+                text += (zero, level, f"{text.pop()[2]:<{message.len_text + message.len_value + 5}}" + txt),
         if len(text) == 0:
             return set_bit(0, 3), 'В данной папке ничего не найдено!'
         return text
@@ -719,6 +738,7 @@ class Deleter:
                 fast_deleter(elem)
             else:
                 txt = f"Удаляем папку: {elem.folders.as_posix()!r}"
+                fast_deleter(elem)
             return txt, count
         return False
 
@@ -779,8 +799,7 @@ class FStat:
                    f"{exc_val}")
 
             logger.all = logger.all[-3:]    # выводим последние 3 строки
-            logger.write_log(mes, is_all=True)
-            # logger.write_log(['-' * width_text, command_line], is_all=True)
+            logger.write_log(mes, info=True)
             logger.send_all()
         return False
 
@@ -878,8 +897,9 @@ class FStat:
             self.count.exclude_files, self.count.exclude_folders = reduce(
                 rules.folders, self.count.exclude_files, self.count.exclude_folders)
 
-        logger.write_log(f"{' Поиск в: ' + f'{self.parent_rule.folders.as_posix()!r}' + ' ':-^{width_text}}")
-        logger.write_log([*_log, self.count])
+        logger.write_log([f"{' Поиск в: ' + f'{self.parent_rule.folders.as_posix()!r}' + ' ':-^{width_text}}",
+                          *_log], info=True)
+        logger.write_log(self.count)
         logger.send_all([int_log, int_console])
 
 
@@ -929,7 +949,9 @@ def recursive_dir(dir_name):
 def send_message(message):
     if platform != "win32" and message:
         path = Path(argv[0]).parent.joinpath('picker_bot.sh')
-        subprocess.call([path, ''.join(message)])
+        txt = map(lambda x: re.sub(r"[-+*#=]*", "", x), message)
+        txt = ''.join(map(lambda x: re.sub(r" {2,}", " ", x), txt))
+        subprocess.call([path, txt])
 
 
 # Главный модуль
@@ -938,15 +960,14 @@ if __name__ == '__main__':
     script_time = datetime.datetime.fromtimestamp(CURRENT_DATE)
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
     arguments = alternative_parsers()
+    create_log()
     work = f'Запуск осуществлен с параметром {arguments.command!r}. ' \
            f'Файлы {"обрабатываются" if arguments.work else "не обрабатываются"}!'
-    command_line = f"Командная строка: {Path(__file__).absolute().as_posix()} {' '.join(argv[1:])}"
-    log()
     total_count = Counter()
     total_parts = Counter()
     logger = Logger()
     logger.write_log(f"Current platform: {platform}")
-    logger.write_log(f"{' Начато: ' + main_time.strftime('%d/%m/%Y, в: %H:%M') + ' ':+^{width_text}}", is_all=True)
+    logger.write_log(f"{' Начато: ' + main_time.strftime('%d/%m/%Y, в: %H:%M') + ' ':+^{width_text}}", info=True)
     logger.write_log(work)
     logger.send_all([int_log, int_console])
     for file in arguments.Search:
@@ -955,24 +976,27 @@ if __name__ == '__main__':
             add_default_rule()
         if file.exists():
             total_parts = recursive_dir(file)
-            logger.write_log(f"{' Итог: [' + f'{file.as_posix()!r}' + '] ':*^{width_text}}")
+            logger.write_log(f"{' Итог: [' + f'{file.as_posix()!r}' + '] ':*^{width_text}}", info=True)
             logger.write_log(total_parts)
             total_count += total_parts
         else:
-            logger.write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена")
-        logger.send_all(sending=[int_log, int_console])
+            logger.write_log(f"{arguments.folder.as_posix()!r} заданная папка не найдена", info=True)
+        logger.send_all([int_log, int_console])
 
-    logger.write_log([f"{'#' * width_text}\n{' Всего: ':-^{width_text}}", total_count])
+    logger.write_log("#" * width_text)
+    logger.write_log(f"{' Всего: ':-^{width_text}}", info=True)
+    logger.write_log(total_count)
     tm_stop = datetime.datetime.now()
-    logger.write_log(f"{' Закончено в: ' + tm_stop.strftime('%d/%m/%Y %H:%M') + ' ':+^{width_text}}", is_all=True)
+    logger.write_log(f"{' Закончено в: ' + tm_stop.strftime('%d/%m/%Y %H:%M') + ' ':+^{width_text}}", info=True)
     tz = datetime.timezone(datetime.timedelta(hours=0))
     sh = "%H: час., %M: мин., %S: сек., %f: мкс."
     logger.write_log(f"{'Время прогона':<25}:  "
                      f"{datetime.datetime.fromtimestamp((tm_stop - main_time).total_seconds(), tz=tz).strftime(sh)}",
-                     is_all=True)
+                     info=True)
 
     logger.write_log(f"{'Время выполнения скрипта':<25}:  "
                      f"{datetime.datetime.fromtimestamp((tm_stop - script_time).total_seconds(), tz=tz).strftime(sh)}",
-                     is_all=True)
+                     info=True)
+    logger.write_log(f"Командная строка: {Path(__file__).absolute().as_posix()} {' '.join(argv[1:])}")
 
     logger.send_all()
