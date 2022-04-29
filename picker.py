@@ -906,14 +906,13 @@ if __name__ == '__main__':
     STR_NOW_DATE = datetime.datetime.fromtimestamp(CURRENT_DATE).strftime("%d-%m-%Y")
     arguments = alternative_parsers()
     create_log()
-    work = f'Запуск осуществлен с параметром {arguments.command!r}. ' \
-           f'Файлы {"обрабатываются" if arguments.work else "не обрабатываются"}!'
     total_count = Counter()
     total_parts = Counter()
     logger = Logger()
     logger.write_log(f"Current platform: {platform}")
     logger.write_log(f"{' Начато: ' + main_time.strftime('%d/%m/%Y, в: %H:%M') + ' ':+^{width_text}}", info=True)
-    logger.write_log(work)
+    logger.write_log(f'Запуск осуществлен с параметром {arguments.command!r}. '
+                     f'Файлы {"обрабатываются" if arguments.work else "не обрабатываются"}!')
     logger.send_all([int_log, int_console])
     for file in arguments.Search:
         arguments.is_old = file == arguments.trash
