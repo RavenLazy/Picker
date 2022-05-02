@@ -193,8 +193,7 @@ def set_bit(num, pos):
 
 
 def re_change(args: argparse.ArgumentParser, line, value):
-    ret = args.parse_args([line.command, line.folder.as_posix(), *value])
-    return ret
+    return args.parse_args([line.command, line.folder.as_posix(), *value])
 
 
 def alternative_parsers():
@@ -353,8 +352,7 @@ def human_read_format(size):
 
 
 def change_parent_equal(item: dict) -> dict:
-    ret = {f"{key}*": (value[0], value[1] if value[2] > 0 else False, value[2]) for key, value in item.items()}
-    return ret
+    return {f"{key}*": (value[0], value[1] if value[2] > 0 else False, value[2]) for key, value in item.items()}
 
 
 def delta(znak, elem, max_time=None):
@@ -441,10 +439,9 @@ class ActionCount(ActionFile):
 
 
 class Logger:
-    __slots__ = ("text", "bot", "log", "all")
+    __slots__ = ("bot", "log", "all")
 
     def __init__(self):
-        self.text = []
         self.bot = []
         self.log = []
         self.all = []
@@ -469,7 +466,6 @@ class Logger:
     @staticmethod
     def _is(lvl, arg, info):
         dif = arg & lvl & 14 or arg & info
-        # if self.is_eq(lvl, arg) or (info and arg):
         if dif:
             return 1
         return 0
